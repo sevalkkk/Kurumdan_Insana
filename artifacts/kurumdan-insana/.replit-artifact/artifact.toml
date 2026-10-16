@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Kurumdan İnsana"
+description = "Kurumsal e-posta ve toplantı jargonunu esprili, samimi iç ses çevirilerine dönüştüren, tamamen tarayıcıda çalışan tek sayfalık Türkçe web uygulaması."
+version = "1.0.0"
+id = "artifacts/kurumdan-insana"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25993
+
+[services.development]
+run = "pnpm --filter @workspace/kurumdan-insana run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/kurumdan-insana", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/kurumdan-insana/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25993"
+BASE_PATH = "/"
