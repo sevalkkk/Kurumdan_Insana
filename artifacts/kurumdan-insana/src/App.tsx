@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { ArrowDown, ArrowRight, Clipboard, Clock3, HeartHandshake, MessageSquareText, RotateCcw, Share2, Sparkles } from 'lucide-react';
+import { translateText } from './translation';
 
 const examples = [
   'Bir araya gelip hizalanalım',
@@ -34,57 +35,6 @@ const faqs = [
   { question: 'Hangi tonlarda çeviri yapıyor?', answer: 'Sözlükteki örneklere yakın, dürüst ve hafif iğneleyici bir iç ses kullanır. Kimseyi hedef almaz; jargonun kendisiyle dalga geçer.' },
   { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Metin alanına istediğiniz cümleyi yazın. Özel bir eşleşme bulunmazsa araç, metnin bağlamına göre esprili bir insan tercümesi üretir.' },
 ];
-
-function translateText(value: string): string {
-  const text = value.trim().replace(/\s+/g, ' ');
-  if (!text) return '';
-  const normalized = text.toLocaleLowerCase('tr-TR').replace(/[.,!?;:]+$/g, '');
-  const matches: Array<[string, string]> = [
-    ['bir araya gelip hizalanalım', 'Herkes aynı şeyi farklı anladı. Bir toplantı daha yapalım.'],
-    ['proaktif aksiyon alalım', 'Sorun büyümeden bir şey yapalım; ne olduğu sonra belli olur.'],
-    ['aksiyon alalım', 'Bir şey yapalım da ne yapacağımıza toplantıda karar verelim.'],
-    ['aksiyon planı', 'Yapılacaklar listesi. Bu kez belki gerçekten yaparız.'],
-    ['değerlendirelim', 'Şimdilik hayır diyemiyorum, o yüzden bekletiyorum.'],
-    ['geri dönüş sağlayacağım', 'Cevap vermeyi unutmazsam sana yazarım.'],
-    ['geri dönüş', 'Cevap. Muhtemelen biraz gecikmeli gelecek.'],
-    ['takvimlerimize davet düşüyorum', 'Bu konuyu maille çözemeyiz diye hepinizin vaktini alacağım.'],
-    ['takvimime davet', 'Vaktini alacak bir toplantı ayarlıyorum.'],
-    ['bir sonraki sprintte', 'Şu an uğraşmak istemiyorum. İki hafta sonra yine konuşuruz.'],
-    ['sprint', 'İşleri aceleyle yetiştirdiğimiz o iki haftalık dönem.'],
-    ['sinerji', 'Birlikte çalışmak. Ama bunu daha pahalı söyleyelim.'],
-    ['verimliliği artırmak', 'Daha az zamanda daha çok iş çıkarmak; tabii kaynak eklemeden.'],
-    ['konuyu park edelim', 'Şu an cevap veremiyorum. Bir süre yok sayalım.'],
-    ['uçtan uca', 'Başından sonuna kadar. Arada sorumluluğu da bize kalıyor.'],
-    ['stakeholder', 'Bu işten haberi olan ya da olması gereken kişi.'],
-    ['önceliklendirelim', 'Hepsi acil ama hangisine önce yetişeceğimizi seçelim.'],
-    ['alignment', 'Herkesin aynı fikirdeymiş gibi başını sallaması.'],
-    ['toplantı', 'Bir mail olabilecek şey için herkesin takvimini kapatmak.'],
-    ['deadline', 'İşin bitmesi gereken ve kimsenin değiştiremeyeceği gün.'],
-    ['feedback', 'Birinin yaptığı işe dair söyleyeceklerim var.'],
-    ['ownership', 'Sorumluluk. Başarılı olursa hepimizin, olmazsa senin.'],
-    ['optimize', 'Daha iyi hâle getirelim; nasıl olacağı toplantıda çıkar.'],
-  ];
-  const found = matches.find(([phrase]) => normalized.includes(phrase));
-  if (found) return found[1];
-
-  const lower = normalized;
-  if (/(acil|hemen|ivedi|bugün)/.test(lower)) {
-    return `Bunu hemen istiyorum; planlamayı da senin sihirli şekilde çözmeni bekliyorum. (${text})`;
-  }
-  if (/(toplant|görüş|bir araya|davet)/.test(lower)) {
-    return `Bunu yazışarak çözemeyeceğimize karar verdik. Takviminden biraz zaman alıyorum. (${text})`;
-  }
-  if (/(rapor|sunum|çıktı|teslim|hazır)/.test(lower)) {
-    return `Bunun bitmesini istiyoruz; ayrıntıları sen toparla, sonra birlikte üzerinden geçeriz. (${text})`;
-  }
-  if (/(bekle|sonra|ileri|ertele|gelecek)/.test(lower)) {
-    return `Şu an önceliğimiz değil ama tamamen de unutmayalım. (${text})`;
-  }
-  if (/(rica|lütfen|paylaş|ilet|gönder)/.test(lower)) {
-    return `Bunu senden istiyorum; nazik yazınca iş yükü biraz daha hafif görünür. (${text})`;
-  }
-  return `Bunu daha kısa söyleyince: “${text}” — yani bunu bir şekilde halletmemiz gerekiyor.`;
-}
 
 function App() {
   const [input, setInput] = useState('');
