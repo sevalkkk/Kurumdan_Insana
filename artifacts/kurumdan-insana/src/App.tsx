@@ -1,5 +1,11 @@
 import { useRef, useState, type FormEvent } from 'react';
+import { ClerkProvider, SignIn } from '@clerk/react';
+import { publishableKeyFromHost } from '@clerk/react/internal';
+import { trTR } from '@clerk/localizations';
+import { shadcn } from '@clerk/themes';
 import { ArrowDown, ArrowRight, Clipboard, Clock3, HeartHandshake, MessageSquareText, RotateCcw, Share2, Sparkles } from 'lucide-react';
+import { Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
+import { SignUpPage } from './auth/SignUpPage';
 import { translateText } from './translation';
 
 const examples = [
@@ -29,6 +35,52 @@ const benefitItems = [
   { icon: <Sparkles size={16} strokeWidth={1.7} />, title: 'Daha samimi ofis dili', copy: 'İnsan gibi konuşmak için yönetim kurulu kararı gerekmez.' },
 ];
 
+const clerkPubKey = publishableKeyFromHost(
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+function stripBase(path: string): string {
+  return basePath && path.startsWith(basePath)
+    ? path.slice(basePath.length) || '/'
+    : path;
+}
+
+if (!clerkPubKey) {
+  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY in the environment.');
+}
+
+const clerkAppearance = {
+  theme: shadcn,
+  cssLayerName: 'clerk',
+  options: {
+    logoPlacement: 'inside' as const,
+    logoLinkUrl: basePath || '/',
+    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
+  },
+  variables: {
+    colorPrimary: '#b8ff01',
+    colorPrimaryForeground: '#11140b',
+    colorForeground: '#e9e9e3',
+    colorMutedForeground: '#92938c',
+    colorDanger: '#ff6b6b',
+    colorBackground: '#191a1c',
+    colorInput: '#121315',
+    colorInputForeground: '#f1f1ea',
+    colorNeutral: '#303134',
+    fontFamily: "'Manrope', sans-serif",
+    borderRadius: '3px',
+  },
+  elements: {
+    rootBox: 'w-full flex justify-center',
+    cardBox: 'bg-[#191a1c] rounded-md w-[440px] max-w-full overflow-hidden',
+    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
+    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
+  },
+};
+
 const faqs = [
   { question: 'Şirket maillerim kaydediliyor mu?', answer: 'Hayır. Yazdığınız metin yalnızca bu sayfada, tarayıcınızda işlenir; hiçbir yere gönderilmez veya kaydedilmez.' },
   { question: 'Ücretsiz mi?', answer: 'Evet. Kurumdan İnsana ücretsiz bir mini araçtır; kullanmak için hesap açmanız gerekmez.' },
@@ -36,7 +88,7 @@ const faqs = [
   { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Metin alanına istediğiniz cümleyi yazın. Özel bir eşleşme bulunmazsa araç, metnin bağlamına göre esprili bir insan tercümesi üretir.' },
 ];
 
-function App() {
+function HomePage() {
   const [input, setInput] = useState('');
   const [result, setResult] = useState('');
   const [status, setStatus] = useState('');
@@ -101,6 +153,7 @@ function App() {
             <nav className="top-nav" aria-label="Ana gezinme">
               <a href="#nasil-calisir" data-testid="link-about">Nasıl çalışır?</a>
               <a href="#sozluk" data-testid="link-glossary">Mini sözlük</a>
+              <a className="signup-link" href={`${basePath}/sign-up`} data-testid="link-sign-up">Kayıt Ol</a>
               <a className="top-link" href="#cevir" data-testid="link-translate">Cümlemi çevir <ArrowRight size={13} /></a>
             </nav>
           </header>
@@ -275,6 +328,52 @@ function App() {
         </div>
       </footer>
     </main>
+  );
+}
+
+function SignInPage() {
+  return (
+    <main className="auth-page">
+      <div className="auth-clerk-card">
+        <SignIn
+          routing="path"
+          path={`${basePath}/sign-in`}
+          signUpUrl={`${basePath}/sign-up`}
+        />
+      </div>
+    </main>
+  );
+}
+
+function ClerkProviderWithRoutes() {
+  const [, setLocation] = useLocation();
+
+  return (
+    <ClerkProvider
+      publishableKey={clerkPubKey}
+      proxyUrl={clerkProxyUrl}
+      appearance={clerkAppearance}
+      signInUrl={`${basePath}/sign-in`}
+      signUpUrl={`${basePath}/sign-up`}
+      localization={trTR}
+      routerPush={(to) => setLocation(stripBase(to))}
+      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+    >
+      <Switch>
+        <Route path="/sign-up/*?" component={SignUpPage} />
+        <Route path="/kayit-ol" component={SignUpPage} />
+        <Route path="/sign-in/*?" component={SignInPage} />
+        <Route path="/" component={HomePage} />
+      </Switch>
+    </ClerkProvider>
+  );
+}
+
+function App() {
+  return (
+    <WouterRouter base={basePath}>
+      <ClerkProviderWithRoutes />
+    </WouterRouter>
   );
 }
 
