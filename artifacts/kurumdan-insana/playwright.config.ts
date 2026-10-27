@@ -1,4 +1,15 @@
 import { defineConfig } from '@playwright/test';
+import fs from 'fs';
+
+const replitChromium = '/repl/tools/bin/chromium';
+const macChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const executablePath =
+  process.env.CHROMIUM_PATH ||
+  (fs.existsSync(replitChromium)
+    ? replitChromium
+    : fs.existsSync(macChrome)
+      ? macChrome
+      : undefined);
 
 export default defineConfig({
   testDir: './e2e',
@@ -9,22 +20,21 @@ export default defineConfig({
     timeout: 20_000,
   },
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:25993',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000',
     browserName: 'chromium',
-    launchOptions: {
-      executablePath: '/repl/tools/bin/chromium',
-      args: ['--no-sandbox', '--disable-dev-shm-usage'],
-    },
+    ...(executablePath
+      ? {
+          launchOptions: {
+            executablePath,
+            args: ['--no-sandbox', '--disable-dev-shm-usage'],
+          },
+        }
+      : {}),
   },
   projects: [
     {
-      name: 'clerk-setup',
-      testMatch: /global\.setup\.ts/,
-    },
-    {
       name: 'chromium',
       testMatch: /.*\.spec\.ts/,
-      dependencies: ['clerk-setup'],
     },
   ],
   reporter: 'list',

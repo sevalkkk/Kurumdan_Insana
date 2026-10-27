@@ -1,12 +1,38 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { ClerkProvider, SignIn } from '@clerk/react';
-import { publishableKeyFromHost } from '@clerk/react/internal';
-import { trTR } from '@clerk/localizations';
-import { shadcn } from '@clerk/themes';
-import { ArrowDown, ArrowRight, Clipboard, Clock3, HeartHandshake, MessageSquareText, RotateCcw, Share2, Sparkles } from 'lucide-react';
-import { Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowRight,
+  Building2,
+  Check,
+  Clipboard,
+  Clock3,
+  Copy,
+  HeartHandshake,
+  LogOut,
+  MessageSquareText,
+  RotateCcw,
+  Share2,
+  Shield,
+  Sparkles,
+} from 'lucide-react';
+import { Link, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
+import { AuthProvider, useAuth } from './auth/AuthContext';
 import { SignUpPage } from './auth/SignUpPage';
-import { translateText } from './translation';
+import { LoginPage } from './auth/LoginPage';
+import { ForgotPasswordPage } from './auth/ForgotPasswordPage';
+import { ProtectedRoute } from './auth/ProtectedRoute';
+import { AdminRoute } from './auth/AdminRoute';
+import { HistoryPage } from './pages/HistoryPage';
+import { ToolsPage } from './pages/ToolsPage';
+import { AdminPage } from './pages/AdminPage';
+import NotFound from './pages/not-found';
+import {
+  SAMPLE_TEXTS,
+  TONE_OPTIONS,
+  translateText,
+  type TranslationTone,
+} from './translation';
 
 const examples = [
   'Bir araya gelip hizalanalım',
@@ -35,111 +61,115 @@ const benefitItems = [
   { icon: <Sparkles size={16} strokeWidth={1.7} />, title: 'Daha samimi ofis dili', copy: 'İnsan gibi konuşmak için yönetim kurulu kararı gerekmez.' },
 ];
 
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
-const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-
-function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || '/'
-    : path;
-}
-
-if (!clerkPubKey) {
-  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY in the environment.');
-}
-
-const clerkAppearance = {
-  theme: shadcn,
-  cssLayerName: 'clerk',
-  options: {
-    logoPlacement: 'inside' as const,
-    logoLinkUrl: basePath || '/',
-    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
-  },
-  variables: {
-    colorPrimary: '#b8ff01',
-    colorPrimaryForeground: '#11140b',
-    colorForeground: '#e9e9e3',
-    colorMutedForeground: '#92938c',
-    colorDanger: '#ff6b6b',
-    colorBackground: '#191a1c',
-    colorInput: '#121315',
-    colorInputForeground: '#f1f1ea',
-    colorNeutral: '#303134',
-    fontFamily: "'Manrope', sans-serif",
-    borderRadius: '3px',
-  },
-  elements: {
-    rootBox: 'w-full flex justify-center',
-    cardBox: 'bg-[#191a1c] rounded-md w-[440px] max-w-full overflow-hidden',
-    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
-  },
-};
-
 const faqs = [
   { question: 'Şirket maillerim kaydediliyor mu?', answer: 'Hayır. Yazdığınız metin yalnızca bu sayfada, tarayıcınızda işlenir; hiçbir yere gönderilmez veya kaydedilmez.' },
   { question: 'Ücretsiz mi?', answer: 'Evet. Kurumdan İnsana ücretsiz bir mini araçtır; kullanmak için hesap açmanız gerekmez.' },
-  { question: 'Hangi tonlarda çeviri yapıyor?', answer: 'Sözlükteki örneklere yakın, dürüst ve hafif iğneleyici bir iç ses kullanır. Kimseyi hedef almaz; jargonun kendisiyle dalga geçer.' },
-  { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Metin alanına istediğiniz cümleyi yazın. Özel bir eşleşme bulunmazsa araç, metnin bağlamına göre esprili bir insan tercümesi üretir.' },
+  { question: 'Hangi tonlarda çeviri yapıyor?', answer: 'Samimi Kanka, Bıkkın Çalışan ve Dürüst Yönetici tonlarında; dürüst, esprili ve iç sesli tercüme üretir.' },
+  { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Metin alanına istediğiniz cümleyi yapıştırın ve dilediğiniz tonu seçerek anında iç sese dönüştürün.' },
 ];
 
+const rawBase = import.meta.env.BASE_URL || '/';
+const basePath = rawBase.replace(/\/$/, '');
+
 function HomePage() {
+  const { user, isAuthenticated, logout, saveTranslation, userHistory } = useAuth();
+  const [, setLocation] = useLocation();
+
   const [input, setInput] = useState('');
+  const [submittedText, setSubmittedText] = useState('');
   const [result, setResult] = useState('');
-  const [status, setStatus] = useState('');
+  const [tone, setTone] = useState<TranslationTone>('bikkin-calisan');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
+
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const sampleIndex = useRef(0);
+  const sampleIndexRef = useRef(0);
 
-  const translate = (text = input) => {
-    const clean = text.trim();
-    if (!clean) {
-      setResult('');
-      setStatus('Önce çevrilecek bir cümle yazın.');
-      textAreaRef.current?.focus();
-      return;
-    }
-    setResult(translateText(clean));
-    setStatus('');
-  };
-
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    translate();
+  const loadSample = () => {
+    const nextSample = SAMPLE_TEXTS[sampleIndexRef.current % SAMPLE_TEXTS.length];
+    sampleIndexRef.current += 1;
+    setInput(nextSample);
+    setErrorMessage('');
+    textAreaRef.current?.focus();
   };
 
   const chooseExample = (text: string) => {
     setInput(text);
-    translate(text);
+    setErrorMessage('');
+    executeTranslation(text, tone);
+  };
+
+  const handleToneChange = (newTone: TranslationTone) => {
+    setTone(newTone);
+    if (submittedText.trim()) {
+      const updated = translateText(submittedText.trim(), newTone);
+      setResult(updated);
+      if (isAuthenticated) {
+        saveTranslation(submittedText.trim(), updated);
+      }
+    }
+  };
+
+  const executeTranslation = (textToTranslate = input, currentTone = tone) => {
+    const clean = textToTranslate.trim();
+    if (!clean) {
+      setErrorMessage('Lütfen çevrilecek bir kurumsal metin girin.');
+      setResult('');
+      setSubmittedText('');
+      textAreaRef.current?.focus();
+      return;
+    }
+
+    setErrorMessage('');
+    setIsTranslating(true);
+
+    const translated = translateText(clean, currentTone);
+    setResult(translated);
+    setSubmittedText(clean);
+    setIsTranslating(false);
+
+    if (isAuthenticated) {
+      saveTranslation(clean, translated);
+    }
+  };
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    executeTranslation();
   };
 
   const newSentence = () => {
-    const next = examples[sampleIndex.current % examples.length];
-    sampleIndex.current += 1;
-    setInput(next);
-    translate(next);
-    setStatus('');
+    setInput('');
+    setSubmittedText('');
+    setResult('');
+    setErrorMessage('');
     textAreaRef.current?.focus();
   };
 
   const copyResult = async () => {
+    if (!result) return;
     try {
       await navigator.clipboard.writeText(result);
-      setStatus('Tercüme panoya kopyalandı.');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
     } catch {
-      setStatus('Kopyalama desteklenmiyor. Metni seçip elle kopyalayabilirsiniz.');
+      // fallback
     }
   };
 
   const shareOnX = () => {
-    const shareText = `Kurumdan İnsana: “${result}”`;
+    const shareText = `Kurumdan İnsana (${TONE_OPTIONS.find((t) => t.id === tone)?.label}): “${result}”`;
     const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   };
+
+  const handleLogout = () => {
+    logout();
+    setLocation('/');
+  };
+
+  const activeToneLabel = TONE_OPTIONS.find((t) => t.id === tone)?.label || 'Bıkkın Çalışan';
 
   return (
     <main className="site-shell">
@@ -153,68 +183,257 @@ function HomePage() {
             <nav className="top-nav" aria-label="Ana gezinme">
               <a href="#nasil-calisir" data-testid="link-about">Nasıl çalışır?</a>
               <a href="#sozluk" data-testid="link-glossary">Mini sözlük</a>
-              <a className="signup-link" href={`${basePath}/sign-up`} data-testid="link-sign-up">Kayıt Ol</a>
-              <a className="top-link" href="#cevir" data-testid="link-translate">Cümlemi çevir <ArrowRight size={13} /></a>
+
+              {/* Dynamic Navbar: If not logged in, show Log In and Sign Up */}
+              {!isAuthenticated ? (
+                <>
+                  <Link className="login-link" href="/login" data-testid="link-login">
+                    Log In
+                  </Link>
+                  <Link className="signup-link" href="/sign-up" data-testid="link-sign-up">
+                    Sign Up
+                  </Link>
+                </>
+              ) : (
+                /* Dynamic Navbar: If logged in, show the user's name, main app view, and Log Out button */
+                <>
+                  <Link className="nav-text-link" href="/" data-testid="link-main-view">
+                    Çevirmen
+                  </Link>
+                  <Link className="nav-text-link" href="/history" data-testid="link-history">
+                    Geçmiş {userHistory.length > 0 && <span className="nav-badge">{userHistory.length}</span>}
+                  </Link>
+                  <Link className="nav-text-link" href="/tools" data-testid="link-tools">
+                    Araçlar
+                  </Link>
+                  {(user?.role === 'admin' || user?.email === 'admin@gmail.com') && (
+                    <Link className="nav-admin-link" href="/admin" data-testid="link-admin-panel">
+                      <Shield size={12} />
+                      <span>Yönetici</span>
+                    </Link>
+                  )}
+                  <span className="user-badge" data-testid="nav-user-name">
+                    <span className="user-badge-dot" aria-hidden="true" />
+                    {user?.name}
+                  </span>
+                  <button
+                    className="logout-btn"
+                    type="button"
+                    onClick={handleLogout}
+                    data-testid="button-logout"
+                    title="Oturumu Güvenle Kapat"
+                  >
+                    <LogOut size={12} aria-hidden="true" />
+                    <span>Log Out</span>
+                  </button>
+                </>
+              )}
+
+              <a className="top-link" href="#cevir" data-testid="link-translate">
+                Cümlemi çevir <ArrowRight size={13} />
+              </a>
             </nav>
           </header>
+
           <div className="hero-inner">
             <div className="eyebrow mono">Ofis jargonuna insan müdahalesi</div>
             <h1 data-testid="text-hero-title">Kurumdan<br /><span>İnsana.</span></h1>
             <p className="hero-copy">Toplantıdan sağ çıkmış cümleleri, insanların gerçekten söylediği hâle getir. Kısa, dürüst, biraz da iç sesli.</p>
+
             <div className="translator" aria-label="Kurumsal jargon çevirmeni">
+              {/* Header with Load Sample Text button */}
               <div className="translator-head mono">
                 <span>CÜMLEYİ BURAYA BIRAK</span>
-                <span className="live-indicator"><i className="live-dot" aria-hidden="true" /> tamamen yerel işlem</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <button
+                    type="button"
+                    className="load-sample-btn"
+                    data-testid="button-load-sample"
+                    onClick={loadSample}
+                    title="Hazır kurumsal örnek metin yükle"
+                  >
+                    <Sparkles size={12} />
+                    <span>Örnek Metin Yükle</span>
+                  </button>
+                  <span className="live-indicator">
+                    <i className="live-dot" aria-hidden="true" /> {isAuthenticated ? `hesap: ${user?.name}` : 'yerel işlem'}
+                  </span>
+                </div>
               </div>
-              <form className="translate-form" onSubmit={onSubmit}>
-                <label className="sr-only" htmlFor="corporate-text">Çevrilecek kurumsal cümle</label>
+
+              {/* Translation Form */}
+              <form className="translate-form-vertical" noValidate onSubmit={onSubmit}>
+                <label className="sr-only" htmlFor="corporate-text">Çevrilecek kurumsal metin</label>
                 <textarea
                   ref={textAreaRef}
                   id="corporate-text"
                   data-testid="input-corporate-text"
                   value={input}
-                  onChange={(event) => { setInput(event.target.value); setStatus(''); }}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
                   onKeyDown={(event) => {
                     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                       event.preventDefault();
-                      translate();
+                      executeTranslation();
                     }
                   }}
-                  placeholder="Örn. Proaktif aksiyon alıp konuyu bir sonraki sprintte ele alalım."
+                  placeholder="Örn: Proaktif aksiyon alıp konuyu bir sonraki sprintte ele alalım. Takvimlerinize davet düşüyorum."
+                  rows={4}
                   maxLength={1000}
                 />
-                <button className="submit-btn" data-testid="button-translate" type="submit">
-                  Çevir / Çileden Çık ➔
+
+                <div className="translator-foot">
+                  <span>Hiçbir yere gönderilmez. Doğrudan tarayıcında işlenir.</span>
+                  <span className="char-count" data-testid="text-character-count">{input.length} / 1000</span>
+                </div>
+
+                {/* Tone Selector Buttons: Samimi Kanka, Bıkkın Çalışan, Dürüst Yönetici */}
+                <div className="tone-selector-container">
+                  <div className="tone-selector-header mono">
+                    <span>ÇEVİRİ TONU SEÇİMİ</span>
+                    <span style={{ color: '#b8ff01' }}>Aktif: {activeToneLabel}</span>
+                  </div>
+                  <div className="tone-buttons-row" role="radiogroup" aria-label="Çeviri Tonu">
+                    {TONE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={tone === opt.id}
+                        className={`tone-button ${tone === opt.id ? 'active' : ''}`}
+                        data-testid={`button-tone-${opt.id}`}
+                        onClick={() => handleToneChange(opt.id)}
+                      >
+                        <span className="tone-icon" aria-hidden="true">{opt.emoji}</span>
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Validation Error Message */}
+                {errorMessage && (
+                  <div className="translator-error-banner" role="alert" data-testid="status-translator">
+                    <AlertCircle size={15} />
+                    <span>{errorMessage}</span>
+                  </div>
+                )}
+
+                {/* Translate Button: İç Sese Çevir */}
+                <button
+                  className="submit-btn"
+                  style={{ width: '100%', marginTop: '16px', minHeight: '52px' }}
+                  data-testid="button-translate"
+                  type="submit"
+                  disabled={isTranslating}
+                >
+                  {isTranslating ? 'İç Sese Dönüştürülüyor…' : 'İç Sese Çevir ➔'}
                   <span>CTRL + ENTER</span>
                 </button>
               </form>
-              <div className="translator-foot">
-                <span>Hiçbir yere gönderilmez. Söz.</span>
-                <span className="char-count" data-testid="text-character-count">{input.length} / 1000</span>
-              </div>
-              <div className="examples" aria-label="Denemek için örnek cümleler">
-                <span className="examples-label mono">ÖRNEKLER</span>
-                {examples.slice(0, 3).map((example, index) => (
-                  <button className="example-chip" type="button" key={example} onClick={() => chooseExample(example)} data-testid={`button-example-${index + 1}`}>
+
+              {/* Sample Chips */}
+              <div className="examples" aria-label="Hızlı deneme cümleleri">
+                <span className="examples-label mono">HIZLI ÖRNEKLER</span>
+                {examples.map((example, index) => (
+                  <button
+                    className="example-chip"
+                    type="button"
+                    key={example}
+                    onClick={() => chooseExample(example)}
+                    data-testid={`button-example-${index + 1}`}
+                  >
                     {example}
                   </button>
                 ))}
               </div>
+
+              {/* Result Box */}
               {result && (
-                <div className="result-card" aria-live="polite" data-testid="card-translation-result">
-                  <div className="result-top">
-                    <span className="result-label mono">İNSAN TERCÜMESİ</span>
-                    <span className="result-tone mono">dürüstlük seviyesi: makul</span>
+                <div className="result-box-wrapper" aria-live="polite" data-testid="card-translation-result">
+                  <div className="result-box-header">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="result-tone-pill mono">
+                        <Sparkles size={11} /> {activeToneLabel}
+                      </span>
+                      <span className="mono" style={{ fontSize: '10px', color: '#777c6d' }}>
+                        AKILLI İÇ SES TERCÜMESİ
+                      </span>
+                    </div>
+
+                    {/* Copy Button at Top-Right Corner of Result Box */}
+                    <button
+                      className={`result-copy-top-btn ${copied ? 'copied' : ''}`}
+                      type="button"
+                      onClick={copyResult}
+                      data-testid="button-copy-result"
+                      title="Tercüme metnini kopyala"
+                    >
+                      {copied ? <Check size={13} color="#11140b" /> : <Copy size={13} />}
+                      <span>{copied ? 'Kopyalandı!' : 'Kopyala'}</span>
+                    </button>
                   </div>
-                  <p className="result-text" data-testid="text-translation-result">{result}</p>
-                  <div className="result-actions">
-                    <button className="quiet-btn" type="button" onClick={copyResult} data-testid="button-copy-result"><Clipboard size={13} /> Metni Kopyala</button>
-                    <button className="quiet-btn" type="button" onClick={shareOnX} data-testid="button-share-x"><Share2 size={13} /> X’te Paylaş</button>
-                    <button className="quiet-btn" type="button" onClick={newSentence} data-testid="button-new-sentence"><RotateCcw size={13} /> Yeni cümle</button>
+
+                  {/* Clearly Labeled: Kurumsal Cümle */}
+                  <div className="result-field-block">
+                    <div className="result-field-title corporate-label mono">
+                      <Building2 size={12} /> KURUMSAL CÜMLE
+                    </div>
+                    <p className="result-corporate-text" data-testid="text-corporate-sentence">
+                      “{submittedText}”
+                    </p>
+                  </div>
+
+                  {/* Clearly Labeled: Gerçek İç Ses */}
+                  <div className="result-field-block">
+                    <div className="result-field-title human-label mono">
+                      <MessageSquareText size={12} /> GERÇEK İÇ SES
+                    </div>
+                    <p className="result-inner-voice-text" data-testid="text-translation-result">
+                      {result}
+                    </p>
+                  </div>
+
+                  {/* Footer Actions */}
+                  <div className="result-footer-actions">
+                    <div className="result-footer-left">
+                      <button
+                        className="quiet-btn"
+                        type="button"
+                        onClick={copyResult}
+                        data-testid="button-copy-result-alt"
+                      >
+                        {copied ? <Check size={12} color="#b8ff01" /> : <Clipboard size={12} />}
+                        {copied ? 'Kopyalandı!' : 'Metni Kopyala'}
+                      </button>
+                      <button
+                        className="quiet-btn"
+                        type="button"
+                        onClick={shareOnX}
+                        data-testid="button-share-x"
+                      >
+                        <Share2 size={12} /> X’te Paylaş
+                      </button>
+                      <button
+                        className="quiet-btn"
+                        type="button"
+                        onClick={newSentence}
+                        data-testid="button-new-sentence"
+                      >
+                        <RotateCcw size={12} /> Yeni Cümle
+                      </button>
+                    </div>
+
+                    {isAuthenticated && (
+                      <span className="result-saved-badge mono">
+                        <Check size={12} /> Kişisel geçmişe kaydedildi
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
-              <div className="status-line" aria-live="polite" role="status" data-testid="status-translator">{status}</div>
             </div>
           </div>
         </div>
@@ -331,48 +550,34 @@ function HomePage() {
   );
 }
 
-function SignInPage() {
+function AppRoutes() {
   return (
-    <main className="auth-page">
-      <div className="auth-clerk-card">
-        <SignIn
-          routing="path"
-          path={`${basePath}/sign-in`}
-          signUpUrl={`${basePath}/sign-up`}
-        />
-      </div>
-    </main>
-  );
-}
-
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-
-  return (
-    <ClerkProvider
-      publishableKey={clerkPubKey}
-      proxyUrl={clerkProxyUrl}
-      appearance={clerkAppearance}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      localization={trTR}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      <Switch>
-        <Route path="/sign-up/*?" component={SignUpPage} />
-        <Route path="/kayit-ol" component={SignUpPage} />
-        <Route path="/sign-in/*?" component={SignInPage} />
-        <Route path="/" component={HomePage} />
-      </Switch>
-    </ClerkProvider>
+    <Switch>
+      <Route path="/sign-up" component={SignUpPage} />
+      <Route path="/kayit-ol" component={SignUpPage} />
+      <Route path="/login" component={LoginPage} />
+      <Route path="/sign-in" component={LoginPage} />
+      <Route path="/giris-yap" component={LoginPage} />
+      <Route path="/forgot-password" component={ForgotPasswordPage} />
+      <Route path="/sifremi-unuttum" component={ForgotPasswordPage} />
+      <Route path="/history">{() => <ProtectedRoute component={HistoryPage} />}</Route>
+      <Route path="/gecmis">{() => <ProtectedRoute component={HistoryPage} />}</Route>
+      <Route path="/tools">{() => <ProtectedRoute component={ToolsPage} />}</Route>
+      <Route path="/araclar">{() => <ProtectedRoute component={ToolsPage} />}</Route>
+      <Route path="/admin">{() => <AdminRoute component={AdminPage} />}</Route>
+      <Route path="/yonetici">{() => <AdminRoute component={AdminPage} />}</Route>
+      <Route path="/" component={HomePage} />
+      <Route component={NotFound} />
+    </Switch>
   );
 }
 
 function App() {
   return (
     <WouterRouter base={basePath}>
-      <ClerkProviderWithRoutes />
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
     </WouterRouter>
   );
 }
