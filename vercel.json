@@ -1,0 +1,10 @@
+{
+  "buildCommand": "pnpm --filter @workspace/kurumdan-insana run build",
+  "outputDirectory": "artifacts/kurumdan-insana/dist/public",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
