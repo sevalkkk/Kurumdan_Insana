@@ -1,3 +1,9 @@
+/// <reference lib="dom" />
+
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
 interface ApiRequest {
   method?: string;
   body?: unknown;
