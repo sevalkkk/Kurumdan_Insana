@@ -186,39 +186,6 @@ function normalizeCorporateForSearch(value: string): string {
     .trim();
 }
 
-const DEFAULT_USERS: User[] = [
-  {
-    uid: 'usr_admin_master',
-    id: 'usr_admin_master',
-    displayName: 'Sistem Yöneticisi',
-    name: 'Sistem Yöneticisi',
-    email: 'admin@gmail.com',
-    passwordHash: hashPassword('admin123'),
-    role: 'yonetici',
-    isActive: true,
-    status: 'active',
-    consentAccepted: true,
-    publishedCount: 0,
-    createdAt: 1730000000000,
-    updatedAt: 1730000000000,
-  },
-  {
-    uid: 'usr_demo_plaza',
-    id: 'usr_demo_plaza',
-    displayName: 'Deniz Kaya',
-    name: 'Deniz Kaya',
-    email: 'deniz@sirket.com',
-    passwordHash: hashPassword('Password123!'),
-    role: 'kullanici',
-    isActive: true,
-    status: 'active',
-    consentAccepted: true,
-    publishedCount: 0,
-    createdAt: 1730000000000,
-    updatedAt: 1730000000000,
-  },
-];
-
 const DEFAULT_PUBLISHED_TRANSLATIONS: TranslationHistoryItem[] = [
   {
     id: 'tr_seed_pub_1',
@@ -335,7 +302,7 @@ const DEFAULT_PUBLISHED_TRANSLATIONS: TranslationHistoryItem[] = [
 function normalizeUserDoc(u: Partial<User> & { id?: string; uid?: string; email: string; name?: string }): User {
   const uid = u.uid || u.id || `usr_${Date.now()}`;
   const displayName = u.displayName || u.name || u.email.split('@')[0];
-  const isAdmin = isAdminRole(u.role, u.email);
+  const isAdmin = isAdminRole(u.role);
   const role: UserRole = isAdmin ? 'yonetici' : 'kullanici';
 
   const isBanned = u.isActive === false || u.status === 'banned';
@@ -348,6 +315,7 @@ function normalizeUserDoc(u: Partial<User> & { id?: string; uid?: string; email:
   return {
     uid,
     id: uid,
+    firebaseUid: u.firebaseUid || uid,
     displayName,
     name: displayName,
     email: u.email,
@@ -364,74 +332,33 @@ function normalizeUserDoc(u: Partial<User> & { id?: string; uid?: string; email:
   };
 }
 
-function initUsers(): User[] {
-  const stored = safeGetItem(USERS_STORAGE_KEY);
-  if (!stored) {
-    safeSetItem(USERS_STORAGE_KEY, JSON.stringify(DEFAULT_USERS));
-    return DEFAULT_USERS;
-  }
-  try {
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      let modified = false;
-      const normalized = parsed.map((rawUser: User) => {
-        const norm = normalizeUserDoc(rawUser);
-        if (
-          rawUser.uid !== norm.uid ||
-          rawUser.isActive !== norm.isActive ||
-          rawUser.role !== norm.role ||
-          rawUser.status !== norm.status ||
-          !rawUser.passwordHash
-        ) {
-          modified = true;
-        }
-        return norm;
-      });
-
-      const adminDefault = DEFAULT_USERS.find((u) => u.email === 'admin@gmail.com')!;
-      const adminFound = normalized.find(
-        (u: User) => u.email.toLowerCase() === 'admin@gmail.com',
-      );
-      if (!adminFound) {
-        normalized.unshift(adminDefault);
-        modified = true;
-      } else if (!isAdminRole(adminFound.role, adminFound.email) || !adminFound.passwordHash) {
-        adminFound.role = 'yonetici';
-        adminFound.passwordHash = adminDefault.passwordHash;
-        modified = true;
-      }
-
-      if (modified) {
-        safeSetItem(USERS_STORAGE_KEY, JSON.stringify(normalized));
-      }
-      return normalized;
-    }
-  } catch {
-    // reset on corruption
-  }
-  safeSetItem(USERS_STORAGE_KEY, JSON.stringify(DEFAULT_USERS));
-  return DEFAULT_USERS;
-}
-
 export const authService = {
   isCloudConnected(): boolean {
     return isFirebaseConfigured();
   },
 
   /**
-   * Firestore `users` koleksiyonundaki tüm dokümanları getirir
-   */
-  getUsers(): User[] {
-    return initUsers();
-  },
-
-  /**
-   * Belirli bir uid değerine sahip kullanıcı dokümanını `users/{uid}` koleksiyonundan getirir
+   * Belirli bir uid değerine sahip kullanıcı bilgisini aktif oturumdan getirir
    */
   getUserByUid(uid: string): User | null {
     if (!uid) return null;
-    const users = this.getUsers();
-    return users.find((u) => u.uid === uid || u.id === uid) || null;
+    const session = this.getCurrentSession();
+    if (session && (session.uid === uid || session.id === uid)) {
+      return {
+        uid: session.uid,
+        id: session.id,
+        firebaseUid: session.uid,
+        displayName: session.displayName,
+        name: session.name,
+        email: session.email,
+        passwordHash: '',
+        role: session.role,
+        isActive: session.isActive,
+        status: session.isActive ? 'active' : 'banned',
+        createdAt: session.loggedInAt,
+      };
+    }
+    return null;
   },
 
   getCurrentSession(): UserSession | null {
@@ -482,64 +409,47 @@ export const authService = {
       return { success: false, fieldErrors };
     }
 
-    const users = this.getUsers();
-    const normalizedEmail = input.email.trim().toLowerCase();
-
-    const existing = users.find(
-      (u) => u.email.trim().toLowerCase() === normalizedEmail,
-    );
-
-    if (existing) {
+    if (!isFirebaseConfigured()) {
+      console.error('[AuthService] Firebase yapılandırılmamış (VITE_FIREBASE_* eksik).');
       return {
         success: false,
-        error: DUPLICATE_EMAIL_MESSAGE,
+        error: 'Sunucu kimlik doğrulama bağlantısı yapılandırılmamış.',
       };
     }
 
+    const normalizedEmail = input.email.trim().toLowerCase();
     const now = Date.now();
-    let uid = `usr_${now}_${Math.random().toString(36).substring(2, 7)}`;
-    let firebaseUid: string | undefined;
-    let sessionToken = `sess_${now}_${Math.random().toString(36).substring(2, 10)}`;
 
-    if (isFirebaseConfigured()) {
-      console.info('[AuthService] Firebase Auth ile kayıt başlatılıyor:', normalizedEmail);
-      const fbRes = await firebaseAuthClient.signUpWithEmailPasswordResult(
-        normalizedEmail,
-        input.password,
-      );
+    console.info('[AuthService] Firebase Auth ile kayıt başlatılıyor:', normalizedEmail);
+    const fbRes = await firebaseAuthClient.signUpWithEmailPasswordResult(
+      normalizedEmail,
+      input.password,
+    );
 
-      if (!fbRes.ok) {
-        if (fbRes.errorCode === 'EMAIL_EXISTS') {
-          return {
-            success: false,
-            error: DUPLICATE_EMAIL_MESSAGE,
-          };
-        }
-        if (!fbRes.isNetworkError) {
-          return {
-            success: false,
-            error: `Kayıt işlemi tamamlanamadı (${fbRes.errorCode}). Lütfen bilgilerinizi kontrol edin.`,
-          };
-        }
-        console.warn('[AuthService] Ağ/ortam nedeniyle yerel kayıt yedeğine düşüldü:', fbRes.errorCode);
-      } else {
-        firebaseUid = fbRes.data.localId;
-        uid = fbRes.data.localId;
-        sessionToken = fbRes.data.idToken;
+    if (!fbRes.ok) {
+      if (fbRes.errorCode === 'EMAIL_EXISTS') {
+        return {
+          success: false,
+          error: DUPLICATE_EMAIL_MESSAGE,
+        };
       }
-    } else {
-      console.warn('[AuthService] Firebase yapılandırılmamış (VITE_FIREBASE_* eksik). Yalnızca yerel kayıt yapılıyor.');
+      return {
+        success: false,
+        error: `Kayıt işlemi tamamlanamadı (${fbRes.errorCode}). Lütfen bilgilerinizi kontrol edin.`,
+      };
     }
 
-    // Firestore `users` koleksiyonu dokümanı: role: 'kullanici', isActive: true, createdAt
-    const newUser: User = {
-      uid,
-      id: uid,
-      firebaseUid,
-      displayName: input.name.trim(),
-      name: input.name.trim(),
+    const firebaseUid = fbRes.data.localId;
+    const sessionToken = fbRes.data.idToken;
+    const displayName = input.name.trim();
+
+    // Firestore `users/{uid}` dokümanını role: 'kullanici' ile oluştur
+    const docToSync: Record<string, unknown> = {
+      uid: firebaseUid,
+      id: firebaseUid,
+      displayName,
+      name: displayName,
       email: normalizedEmail,
-      passwordHash: hashPassword(input.password),
       role: 'kullanici',
       isActive: true,
       status: 'active',
@@ -548,48 +458,27 @@ export const authService = {
       createdAt: now,
       updatedAt: now,
     };
-
-    users.push(newUser);
-    safeSetItem(USERS_STORAGE_KEY, JSON.stringify(users));
-
-    // Firestore `users/{uid}` dokümanını role: 'kullanici' ile oluştur
-    if (isFirebaseConfigured() && firebaseUid) {
-      const docToSync: Record<string, unknown> = {
-        uid: firebaseUid,
-        id: firebaseUid,
-        appUid: firebaseUid,
-        displayName: newUser.displayName,
-        name: newUser.name,
-        email: newUser.email,
-        passwordHash: newUser.passwordHash,
-        role: 'kullanici',
-        isActive: true,
-        status: 'active',
-        consentAccepted: newUser.consentAccepted,
-        publishedCount: 0,
-        createdAt: newUser.createdAt,
-        updatedAt: newUser.updatedAt,
+    const saved = await cloudFirestoreClient.setDoc(
+      'users',
+      firebaseUid,
+      docToSync,
+      sessionToken,
+    );
+    if (!saved) {
+      console.error('[Firestore] users/{uid} profil dokümanı oluşturulamadı:', firebaseUid);
+      return {
+        success: false,
+        error: 'Kullanıcı profili Cloud Firestore üzerinde oluşturulamadı. Lütfen tekrar deneyin.',
       };
-      const saved = await cloudFirestoreClient.setDoc(
-        'users',
-        firebaseUid,
-        docToSync,
-        sessionToken,
-      );
-      if (saved) {
-        console.info('[Firestore] users/{uid} profil dokümanı oluşturuldu:', firebaseUid);
-      } else {
-        console.error('[Firestore] users/{uid} profil dokümanı oluşturulamadı:', firebaseUid);
-      }
-      await this.syncFromCloud();
     }
+    console.info('[Firestore] users/{uid} profil dokümanı oluşturuldu:', firebaseUid);
 
     const session: UserSession = {
-      uid: newUser.uid,
-      id: newUser.id,
-      displayName: newUser.displayName,
-      name: newUser.name,
-      email: newUser.email,
+      uid: firebaseUid,
+      id: firebaseUid,
+      displayName,
+      name: displayName,
+      email: normalizedEmail,
       role: 'kullanici',
       isActive: true,
       token: sessionToken,
@@ -598,6 +487,7 @@ export const authService = {
     };
 
     this.setCurrentSession(session);
+    await this.syncFromCloud();
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('auth_users_updated'));
     }
@@ -615,182 +505,83 @@ export const authService = {
       return { success: false, fieldErrors };
     }
 
-    const users = this.getUsers();
-    const normalizedEmail = input.email.trim().toLowerCase();
-    const localUser = users.find(
-      (u) => u.email.trim().toLowerCase() === normalizedEmail,
-    );
-
-    if (localUser && localUser.status === 'banned') {
+    if (!isFirebaseConfigured()) {
+      console.error('[AuthService] Firebase yapılandırılmamış (VITE_FIREBASE_* eksik).');
       return {
         success: false,
-        error: 'Hesabınız askıya alınmıştır. Lütfen yönetici ile iletişime geçin.',
+        error: 'Sunucu kimlik doğrulama bağlantısı yapılandırılmamış.',
       };
     }
 
+    const normalizedEmail = input.email.trim().toLowerCase();
     const now = Date.now();
 
-    if (isFirebaseConfigured()) {
-      console.info('[AuthService] Firebase Auth ile giriş başlatılıyor:', normalizedEmail);
-      let fbRes = await firebaseAuthClient.signInWithEmailPasswordResult(
-        normalizedEmail,
-        input.password,
-      );
+    console.info('[AuthService] Firebase Auth ile giriş başlatılıyor:', normalizedEmail);
+    const fbRes = await firebaseAuthClient.signInWithEmailPasswordResult(
+      normalizedEmail,
+      input.password,
+    );
 
-      // Varsayılan demo/admin hesabı henüz Firebase Auth'ta yoksa ve yerel şifre tutuyorsa otomatik oluştur
-      if (
-        !fbRes.ok &&
-        !fbRes.isNetworkError &&
-        localUser &&
-        verifyPassword(input.password, localUser) &&
-        (fbRes.errorCode === 'INVALID_LOGIN_CREDENTIALS' ||
-          fbRes.errorCode === 'EMAIL_NOT_FOUND' ||
-          fbRes.errorCode === 'INVALID_PASSWORD')
-      ) {
-        console.info('[AuthService] Yerel hesap Firebase Auth üzerinde oluşturuluyor:', normalizedEmail);
-        fbRes = await firebaseAuthClient.signUpWithEmailPasswordResult(
-          normalizedEmail,
-          input.password,
-        );
-      }
-
-      if (fbRes.ok) {
-        const fbAuth = fbRes.data;
-        const existingProfile = await cloudFirestoreClient.getDoc<Record<string, unknown>>(
-          'users',
-          fbAuth.localId,
-          fbAuth.idToken,
-        );
-
-        const isAdminEmail = normalizedEmail === 'admin@gmail.com';
-        let resolvedRole: UserRole =
-          localUser?.role === 'admin' || isAdminEmail ? 'admin' : 'user';
-        let resolvedStatus: UserStatus = 'active';
-        let resolvedName =
-          localUser?.name || normalizedEmail.split('@')[0];
-
-        if (!existingProfile) {
-          const firestoreRole = resolvedRole === 'admin' ? 'yonetici' : 'kullanici';
-          const created = await cloudFirestoreClient.setDoc(
-            'users',
-            fbAuth.localId,
-            {
-              uid: fbAuth.localId,
-              id: fbAuth.localId,
-              displayName: resolvedName,
-              name: resolvedName,
-              email: normalizedEmail,
-              role: firestoreRole,
-              isActive: true,
-              status: 'active',
-              createdAt: localUser?.createdAt || now,
-              updatedAt: now,
-            },
-            fbAuth.idToken,
-          );
-          if (!created) {
-            console.error('[Firestore] İlk girişte users/{uid} dokümanı oluşturulamadı:', fbAuth.localId);
-          }
-        } else {
-          const cloudRole = String(existingProfile.role || '').toLowerCase();
-          resolvedRole =
-            cloudRole === 'yonetici' || cloudRole === 'admin' || isAdminEmail
-              ? 'admin'
-              : 'user';
-          const isActive =
-            existingProfile.isActive !== false && existingProfile.status !== 'banned';
-          resolvedStatus = isActive ? 'active' : 'banned';
-          resolvedName = String(
-            existingProfile.displayName || existingProfile.name || resolvedName,
-          );
-        }
-
-        if (resolvedStatus === 'banned') {
-          this.logout();
-          return {
-            success: false,
-            error: 'Hesabınız askıya alınmıştır. Lütfen yönetici ile iletişime geçin.',
-          };
-        }
-
-        const updatedUsers = this.getUsers();
-        const idx = updatedUsers.findIndex((u) => u.email.toLowerCase() === normalizedEmail);
-        const syncedId = localUser?.uid || localUser?.id || fbAuth.localId;
-        const syncedIsActive = resolvedStatus === 'active';
-        const syncedUser: User = {
-          uid: syncedId,
-          id: syncedId,
-          firebaseUid: fbAuth.localId,
-          displayName: resolvedName,
-          name: resolvedName,
-          email: normalizedEmail,
-          passwordHash: localUser?.passwordHash || hashPassword(input.password),
-          role: resolvedRole,
-          isActive: syncedIsActive,
-          status: resolvedStatus,
-          createdAt: localUser?.createdAt || now,
-          updatedAt: now,
-        };
-        if (idx >= 0) {
-          updatedUsers[idx] = { ...updatedUsers[idx], ...syncedUser };
-        } else {
-          updatedUsers.push(syncedUser);
-        }
-        safeSetItem(USERS_STORAGE_KEY, JSON.stringify(updatedUsers));
-
-        const session: UserSession = {
-          uid: syncedId,
-          id: syncedId,
-          displayName: resolvedName,
-          name: resolvedName,
-          email: normalizedEmail,
-          role: resolvedRole,
-          isActive: syncedIsActive,
-          token: fbAuth.idToken,
-          loggedInAt: now,
-          expiresAt: now + SESSION_EXPIRY_MS,
-        };
-
-        this.setCurrentSession(session);
-        await this.syncFromCloud();
-        return { success: true, user: session };
-      }
-
-      if (!fbRes.isNetworkError) {
-        return {
-          success: false,
-          error: GENERIC_LOGIN_ERROR,
-        };
-      }
-      console.warn('[AuthService] Ağ/ortam nedeniyle yerel giriş yedeğine düşüldü:', fbRes.errorCode);
-    } else {
-      console.warn('[AuthService] Firebase yapılandırılmamış. Yalnızca yerel giriş kontrolü yapılıyor.');
-    }
-
-    if (!localUser || !verifyPassword(input.password, localUser)) {
-      // Secure generic error message
+    if (!fbRes.ok) {
       return {
         success: false,
         error: GENERIC_LOGIN_ERROR,
       };
     }
 
-    const role: UserRole = localUser.role || (normalizedEmail === 'admin@gmail.com' ? 'yonetici' : 'kullanici');
-    const localUid = localUser.uid || localUser.id;
+    const fbAuth = fbRes.data;
+    const existingProfile = await cloudFirestoreClient.getDoc<Record<string, unknown>>(
+      'users',
+      fbAuth.localId,
+      fbAuth.idToken,
+    );
+
+    // Firestore `users/{uid}` belgesi yoksa giriş reddedilir
+    if (!existingProfile) {
+      console.error('[AuthService] Giriş reddedildi: Firestore users/{uid} belgesi bulunamadı:', fbAuth.localId);
+      this.logout();
+      return {
+        success: false,
+        error: 'Kullanıcı profili Cloud Firestore üzerinde bulunamadı. Lütfen yönetici ile iletişime geçin.',
+      };
+    }
+
+    const isActive =
+      existingProfile.isActive !== false && existingProfile.status !== 'banned';
+
+    if (!isActive) {
+      console.warn('[AuthService] Giriş reddedildi: Hesap askıya alınmış veya pasif:', fbAuth.localId);
+      this.logout();
+      return {
+        success: false,
+        error: 'Hesabınız askıya alınmıştır. Lütfen yönetici ile iletişime geçin.',
+      };
+    }
+
+    const resolvedRole: UserRole = isAdminRole(
+      existingProfile.role as UserRole | string | undefined,
+    )
+      ? 'yonetici'
+      : 'kullanici';
+    const resolvedName = String(
+      existingProfile.displayName || existingProfile.name || normalizedEmail.split('@')[0],
+    );
+
     const session: UserSession = {
-      uid: localUid,
-      id: localUid,
-      displayName: localUser.displayName || localUser.name,
-      name: localUser.name,
-      email: localUser.email,
-      role,
-      isActive: localUser.isActive ?? true,
-      token: `sess_${now}_${Math.random().toString(36).substring(2, 10)}`,
+      uid: fbAuth.localId,
+      id: fbAuth.localId,
+      displayName: resolvedName,
+      name: resolvedName,
+      email: normalizedEmail,
+      role: resolvedRole,
+      isActive: true,
+      token: fbAuth.idToken,
       loggedInAt: now,
       expiresAt: now + SESSION_EXPIRY_MS,
     };
 
     this.setCurrentSession(session);
+    await this.syncFromCloud();
     return { success: true, user: session };
   },
 
@@ -808,26 +599,9 @@ export const authService = {
       };
     }
 
-    const users = this.getUsers();
     const normalizedEmail = email.trim().toLowerCase();
-    const exists = users.some((u) => u.email.toLowerCase() === normalizedEmail);
-
-    if (exists) {
-      try {
-        const resetsRaw = safeGetItem(RESETS_STORAGE_KEY) || '[]';
-        const resets = JSON.parse(resetsRaw);
-        resets.push({
-          email: normalizedEmail,
-          token: `reset_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`,
-          requestedAt: Date.now(),
-        });
-        safeSetItem(RESETS_STORAGE_KEY, JSON.stringify(resets));
-      } catch {
-        // ignore reset log error
-      }
-      if (isFirebaseConfigured()) {
-        void firebaseAuthClient.sendPasswordResetEmail(normalizedEmail);
-      }
+    if (isFirebaseConfigured()) {
+      void firebaseAuthClient.sendPasswordResetEmail(normalizedEmail);
     }
 
     return {
@@ -842,109 +616,166 @@ export const authService = {
   },
 
   // ==========================================
-  // ADMIN PANEL OPERATIONS (USERS & ROLES)
+  // ADMIN PANEL OPERATIONS (CLOUD FIRESTORE `users` KOLEKSİYONU)
   // ==========================================
-  adminGetUsers(): User[] {
-    return this.getUsers();
+  async adminFetchUsersFromFirestore(): Promise<{ success: boolean; users: User[]; error?: string }> {
+    if (!isFirebaseConfigured()) {
+      return { success: false, users: [], error: 'Firebase bağlantısı yapılandırılmamış.' };
+    }
+    const currentSession = this.getCurrentSession();
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const token = fbAuth?.idToken || currentSession?.token;
+    const cloudUsers = await cloudFirestoreClient.listDocs<User>('users', token);
+    if (cloudUsers === null) {
+      return {
+        success: false,
+        users: [],
+        error: 'Cloud Firestore users koleksiyonu okunamadı. Yönetici yetkilerinizi kontrol edin.',
+      };
+    }
+    const normalized = cloudUsers
+      .filter((u) => Boolean(u && u.email))
+      .map((u) => normalizeUserDoc(u))
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return { success: true, users: normalized };
   },
 
-  adminDeleteUser(userId: string): { success: boolean; error?: string } {
-    if (!userId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
+  async adminDeleteUser(targetUser: User): Promise<{ success: boolean; error?: string }> {
+    const targetDocId = targetUser.firebaseUid || targetUser.uid || targetUser.id;
+    if (!targetDocId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
 
     const currentSession = this.getCurrentSession();
-    if (currentSession && (currentSession.uid === userId || currentSession.id === userId)) {
+    if (currentSession && (currentSession.uid === targetDocId || currentSession.id === targetDocId)) {
       return { success: false, error: 'Kendi yönetici hesabınızı silemezsiniz.' };
     }
 
-    const users = this.getUsers();
-    const target = users.find((u) => u.uid === userId || u.id === userId);
-    if (!target) {
-      return { success: false, error: 'Kullanıcı bulunamadı.' };
-    }
-    if (target.email.toLowerCase() === 'admin@gmail.com') {
-      return { success: false, error: 'Ana yönetici hesabı silinemez.' };
+    if (!isFirebaseConfigured()) {
+      return { success: false, error: 'Firebase bağlantısı yapılandırılmamış.' };
     }
 
-    const remaining = users.filter((u) => u.uid !== userId && u.id !== userId);
-    safeSetItem(USERS_STORAGE_KEY, JSON.stringify(remaining));
-
-    this.clearUserHistory(userId);
-    this.clearUserFavorites(userId);
-
-    if (isFirebaseConfigured()) {
-      const fbAuth = firebaseAuthClient.getStoredAuth();
-      const targetDocId = target.firebaseUid || target.uid;
-      void cloudFirestoreClient.deleteDoc('users', targetDocId, fbAuth?.idToken || currentSession?.token);
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const deleted = await cloudFirestoreClient.deleteDoc(
+      'users',
+      targetDocId,
+      fbAuth?.idToken || currentSession?.token,
+    );
+    if (!deleted) {
+      return { success: false, error: 'Kullanıcı Cloud Firestore üzerinden silinemedi.' };
     }
+
+    this.clearUserHistory(targetDocId);
+    this.clearUserFavorites(targetDocId);
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('auth_users_updated'));
-      window.dispatchEvent(new Event('auth_state_changed'));
     }
     return { success: true };
   },
 
-  adminToggleBanUser(userId: string): {
+  async adminToggleBanUser(targetUser: User): Promise<{
     success: boolean;
     newStatus?: UserStatus;
     isActive?: boolean;
     error?: string;
-  } {
-    if (!userId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
+  }> {
+    const targetDocId = targetUser.firebaseUid || targetUser.uid || targetUser.id;
+    if (!targetDocId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
 
     const currentSession = this.getCurrentSession();
-    if (currentSession && (currentSession.uid === userId || currentSession.id === userId)) {
+    if (currentSession && (currentSession.uid === targetDocId || currentSession.id === targetDocId)) {
       return { success: false, error: 'Kendi yönetici hesabınızı askıya alamazsınız.' };
     }
 
-    const users = this.getUsers();
-    const user = users.find((u) => u.uid === userId || u.id === userId);
-    if (!user) {
-      return { success: false, error: 'Kullanıcı bulunamadı.' };
-    }
-    if (user.email.toLowerCase() === 'admin@gmail.com') {
-      return { success: false, error: 'Ana yönetici hesabı askıya alınamaz.' };
+    if (!isFirebaseConfigured()) {
+      return { success: false, error: 'Firebase bağlantısı yapılandırılmamış.' };
     }
 
-    const currentlyBanned = user.isActive === false || user.status === 'banned';
+    const currentlyBanned = targetUser.isActive === false || targetUser.status === 'banned';
     const nextIsActive = currentlyBanned;
     const newStatus: UserStatus = nextIsActive ? 'active' : 'banned';
+    const now = Date.now();
 
-    user.isActive = nextIsActive;
-    user.status = newStatus;
-    user.updatedAt = Date.now();
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const saved = await cloudFirestoreClient.setDoc(
+      'users',
+      targetDocId,
+      {
+        uid: targetDocId,
+        id: targetDocId,
+        displayName: targetUser.displayName || targetUser.name,
+        name: targetUser.name || targetUser.displayName,
+        email: targetUser.email,
+        role: isAdminRole(targetUser.role) ? 'yonetici' : 'kullanici',
+        isActive: nextIsActive,
+        status: newStatus,
+        createdAt: targetUser.createdAt || now,
+        updatedAt: now,
+      },
+      fbAuth?.idToken || currentSession?.token,
+    );
 
-    safeSetItem(USERS_STORAGE_KEY, JSON.stringify(users));
-
-    if (isFirebaseConfigured()) {
-      const fbAuth = firebaseAuthClient.getStoredAuth();
-      const targetDocId = user.firebaseUid || user.uid;
-      void cloudFirestoreClient.setDoc(
-        'users',
-        targetDocId,
-        {
-          ...user,
-          uid: targetDocId,
-          id: targetDocId,
-          appUid: user.uid,
-        } as unknown as Record<string, unknown>,
-        fbAuth?.idToken || currentSession?.token,
-      );
+    if (!saved) {
+      return { success: false, error: 'Kullanıcı durumu Cloud Firestore üzerinde güncellenemedi.' };
     }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('auth_users_updated'));
-      window.dispatchEvent(new Event('auth_state_changed'));
     }
     return { success: true, newStatus, isActive: nextIsActive };
   },
 
-  adminCreateUser(input: {
+  async adminUpdateUserRole(
+    targetUser: User,
+    nextRole: 'yonetici' | 'kullanici',
+  ): Promise<{ success: boolean; role?: UserRole; error?: string }> {
+    const targetDocId = targetUser.firebaseUid || targetUser.uid || targetUser.id;
+    if (!targetDocId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
+
+    const currentSession = this.getCurrentSession();
+    if (currentSession && (currentSession.uid === targetDocId || currentSession.id === targetDocId)) {
+      return { success: false, error: 'Kendi yönetici rolünüzü değiştiremezsiniz.' };
+    }
+
+    if (!isFirebaseConfigured()) {
+      return { success: false, error: 'Firebase bağlantısı yapılandırılmamış.' };
+    }
+
+    const now = Date.now();
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const saved = await cloudFirestoreClient.setDoc(
+      'users',
+      targetDocId,
+      {
+        uid: targetDocId,
+        id: targetDocId,
+        displayName: targetUser.displayName || targetUser.name,
+        name: targetUser.name || targetUser.displayName,
+        email: targetUser.email,
+        role: nextRole,
+        isActive: targetUser.isActive ?? true,
+        status: targetUser.status ?? 'active',
+        createdAt: targetUser.createdAt || now,
+        updatedAt: now,
+      },
+      fbAuth?.idToken || currentSession?.token,
+    );
+
+    if (!saved) {
+      return { success: false, error: 'Kullanıcı rolü Cloud Firestore üzerinde güncellenemedi.' };
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('auth_users_updated'));
+    }
+    return { success: true, role: nextRole };
+  },
+
+  async adminCreateUser(input: {
     name: string;
     email: string;
     password: string;
     role?: UserRole;
-  }): { success: boolean; user?: User; error?: string } {
+  }): Promise<{ success: boolean; user?: User; error?: string }> {
     if (!input.name || !input.name.trim()) {
       return { success: false, error: 'Ad soyad alanı zorunludur.' };
     }
@@ -957,27 +788,34 @@ export const authService = {
     if (!input.password || input.password.length < 6) {
       return { success: false, error: 'Şifre en az 6 karakter olmalıdır.' };
     }
+    if (!isFirebaseConfigured()) {
+      return { success: false, error: 'Firebase bağlantısı yapılandırılmamış.' };
+    }
 
-    const users = this.getUsers();
     const normalizedEmail = input.email.trim().toLowerCase();
-    const exists = users.some((u) => u.email.toLowerCase() === normalizedEmail);
-    if (exists) {
-      return { success: false, error: 'Bu e-posta adresiyle kayıtlı bir kullanıcı zaten mevcut.' };
+    const fbRes = await firebaseAuthClient.createUserWithoutSwitchingSession(
+      normalizedEmail,
+      input.password,
+    );
+    if (!fbRes.ok) {
+      if (fbRes.errorCode === 'EMAIL_EXISTS') {
+        return { success: false, error: 'Bu e-posta adresiyle kayıtlı bir kullanıcı zaten mevcut.' };
+      }
+      return { success: false, error: `Kullanıcı oluşturulamadı (${fbRes.errorCode}).` };
     }
 
     const now = Date.now();
-    const uid = `usr_${now}_${Math.random().toString(36).substring(2, 7)}`;
-    const normalizedRole: UserRole = isAdminRole(input.role, normalizedEmail)
-      ? 'yonetici'
-      : 'kullanici';
+    const uid = fbRes.data.localId;
+    const normalizedRole: UserRole = isAdminRole(input.role) ? 'yonetici' : 'kullanici';
 
     const newUser: User = {
       uid,
       id: uid,
+      firebaseUid: uid,
       displayName: input.name.trim(),
       name: input.name.trim(),
       email: normalizedEmail,
-      passwordHash: hashPassword(input.password),
+      passwordHash: '',
       role: normalizedRole,
       isActive: true,
       status: 'active',
@@ -989,17 +827,30 @@ export const authService = {
       updatedAt: now,
     };
 
-    users.push(newUser);
-    safeSetItem(USERS_STORAGE_KEY, JSON.stringify(users));
-
     const currentSession = this.getCurrentSession();
-    if (isFirebaseConfigured()) {
-      void cloudFirestoreClient.setDoc(
-        'users',
-        newUser.uid,
-        newUser as unknown as Record<string, unknown>,
-        currentSession?.token,
-      );
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const saved = await cloudFirestoreClient.setDoc(
+      'users',
+      uid,
+      {
+        uid,
+        id: uid,
+        displayName: newUser.displayName,
+        name: newUser.name,
+        email: newUser.email,
+        role: normalizedRole,
+        isActive: true,
+        status: 'active',
+        consentAccepted: true,
+        publishedCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      fbAuth?.idToken || currentSession?.token,
+    );
+
+    if (!saved) {
+      return { success: false, error: 'Kullanıcı profili Cloud Firestore üzerinde oluşturulamadı.' };
     }
 
     if (typeof window !== 'undefined') {
@@ -1747,77 +1598,31 @@ export const authService = {
           fbAuth.localId,
           token,
         );
-        if (ownProfile) {
-          const cloudRole: UserRole = isAdminRole(ownProfile.role, session.email)
-            ? 'yonetici'
-            : 'kullanici';
-          const cloudIsActive =
-            ownProfile.isActive !== false && ownProfile.status !== 'banned';
-
-          const localUsers = this.getUsers();
-          const idx = localUsers.findIndex(
-            (u) => u.email.toLowerCase() === session.email.toLowerCase(),
-          );
-          if (idx >= 0) {
-            localUsers[idx] = {
-              ...localUsers[idx],
-              firebaseUid: fbAuth.localId,
-              role: cloudRole,
-              isActive: cloudIsActive,
-              status: cloudIsActive ? 'active' : 'banned',
-            };
-            safeSetItem(USERS_STORAGE_KEY, JSON.stringify(localUsers));
-          }
-
-          if (!cloudIsActive) {
-            this.logout();
-            return;
-          }
-
-          if (session.role !== cloudRole || session.isActive !== cloudIsActive) {
-            this.setCurrentSession({
-              ...session,
-              role: cloudRole,
-              isActive: cloudIsActive,
-            });
-          }
+        if (!ownProfile) {
+          this.logout();
+          return;
         }
-      }
+        const cloudRole: UserRole = isAdminRole(ownProfile.role)
+          ? 'yonetici'
+          : 'kullanici';
+        const cloudIsActive =
+          ownProfile.isActive !== false && ownProfile.status !== 'banned';
 
-      // 6. Yönetici ise tüm kullanıcıları çek
-      const latestSession = this.getCurrentSession();
-      if (latestSession?.role === 'yonetici' && token) {
-        const cloudUsers = await cloudFirestoreClient.listDocs<User & { appUid?: string }>(
-          'users',
-          token,
-        );
-        if (cloudUsers && cloudUsers.length > 0) {
-          const localUsers = this.getUsers();
-          const byEmail = new Map<string, User>();
-          for (const u of localUsers) byEmail.set(u.email.toLowerCase(), u);
-          for (const cu of cloudUsers) {
-            if (!cu || !cu.email) continue;
-            const key = cu.email.toLowerCase();
-            const existing = byEmail.get(key);
-            byEmail.set(
-              key,
-              normalizeUserDoc({
-                ...existing,
-                ...cu,
-                firebaseUid: cu.uid || existing?.firebaseUid,
-                uid: existing?.uid || cu.appUid || cu.uid,
-                id: existing?.id || cu.appUid || cu.id,
-              }),
-            );
-          }
-          safeSetItem(USERS_STORAGE_KEY, JSON.stringify(Array.from(byEmail.values())));
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new Event('auth_users_updated'));
-          }
+        if (!cloudIsActive) {
+          this.logout();
+          return;
+        }
+
+        if (session.role !== cloudRole || session.isActive !== cloudIsActive) {
+          this.setCurrentSession({
+            ...session,
+            role: cloudRole,
+            isActive: cloudIsActive,
+          });
         }
       }
     } catch {
-      // Ağ hatasında yerel önbellek korunur
+      // Ağ hatasında mevcut oturum korunur
     }
   },
 };

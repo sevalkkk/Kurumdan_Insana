@@ -19,7 +19,7 @@ export function AdminRoute({ component: Component, ...rest }: AdminRouteProps) {
   }
 
   // If authenticated but not admin, deny access and return to home view
-  if (!isAdminRole(user?.role, user?.email)) {
+  if (!isAdminRole(user?.role)) {
     return <Redirect to="/" />;
   }
 

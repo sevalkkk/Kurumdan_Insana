@@ -38,7 +38,7 @@ export function LoginPage() {
       }
 
       // If the user logs in as Admin, redirect specifically to Admin Panel
-      if (result.user?.role === 'admin' || email.trim().toLowerCase() === 'admin@gmail.com') {
+      if (result.user?.role === 'yonetici' || result.user?.role === 'admin') {
         setLocation('/admin');
         return;
       }

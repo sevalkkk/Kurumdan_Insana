@@ -480,6 +480,51 @@ export const firebaseAuthClient = {
     return res.ok ? res.data : null;
   },
 
+  async createUserWithoutSwitchingSession(
+    email: string,
+    password: string,
+  ): Promise<FirebaseAuthResult> {
+    if (!isFirebaseConfigured()) {
+      return {
+        ok: false,
+        errorCode: 'FIREBASE_NOT_CONFIGURED',
+        errorMessage: 'Firebase yapılandırılmamış.',
+        isNetworkError: true,
+      };
+    }
+    try {
+      const res = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, returnSecureToken: true }),
+        },
+      );
+      const json = (await res.json().catch(() => ({}))) as {
+        localId?: string;
+        idToken?: string;
+        refreshToken?: string;
+        error?: { message?: string };
+      };
+      if (!res.ok || !json.localId || !json.idToken) {
+        const errorCode = json.error?.message || `HTTP_${res.status}`;
+        return { ok: false, errorCode, errorMessage: errorCode };
+      }
+      return {
+        ok: true,
+        data: {
+          localId: json.localId,
+          idToken: json.idToken,
+          refreshToken: json.refreshToken,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Network error';
+      return { ok: false, errorCode: 'NETWORK_ERROR', errorMessage: message, isNetworkError: true };
+    }
+  },
+
   async refreshIdToken(): Promise<string | null> {
     if (!isFirebaseConfigured()) return null;
     const stored = this.getStoredAuth();

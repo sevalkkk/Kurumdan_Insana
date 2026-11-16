@@ -24,13 +24,9 @@ service cloud.firestore {
 
     // Kullanıcının yönetici (role == 'yonetici') olup olmadığını kontrol eder
     function isAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.email == 'admin@gmail.com' ||
-        (
-          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          getUserData().role == 'yonetici'
-        )
-      );
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().role == 'yonetici';
     }
 
     // =========================================================================

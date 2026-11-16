@@ -18,13 +18,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { authService } from '@/auth/authService';
-import type { User, UserRole } from '@/auth/types';
+import { isAdminRole, type User, type UserRole } from '@/auth/types';
 
 export function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
 
   const [users, setUsers] = useState<User[]>([]);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -33,25 +34,38 @@ export function AdminPage() {
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newRole, setNewRole] = useState<UserRole>('user');
+  const [newRole, setNewRole] = useState<UserRole>('kullanici');
   const [modalError, setModalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const loadUsers = () => {
-    const list = authService.adminGetUsers();
-    setUsers(list);
+  const loadUsers = async () => {
+    setIsLoadingUsers(true);
+    try {
+      const res = await authService.adminFetchUsersFromFirestore();
+      if (!res.success) {
+        showNotification('error', res.error || 'Kullanıcılar Cloud Firestore üzerinden alınamadı.');
+        setUsers([]);
+      } else {
+        setUsers(res.users);
+      }
+    } catch (err) {
+      console.error('[AdminPage] Kullanıcı listesi yüklenemedi:', err);
+      showNotification('error', 'Kullanıcılar yüklenirken beklenmeyen bir hata oluştu.');
+    } finally {
+      setIsLoadingUsers(false);
+    }
   };
 
   useEffect(() => {
-    loadUsers();
+    void loadUsers();
 
-    const handleUpdate = () => loadUsers();
+    const handleUpdate = () => {
+      void loadUsers();
+    };
     window.addEventListener('auth_users_updated', handleUpdate);
-    window.addEventListener('storage', handleUpdate);
 
     return () => {
       window.removeEventListener('auth_users_updated', handleUpdate);
-      window.removeEventListener('storage', handleUpdate);
     };
   }, []);
 
@@ -62,57 +76,73 @@ export function AdminPage() {
     }, 3500);
   };
 
-  const handleToggleBan = (targetUser: User) => {
-    const res = authService.adminToggleBanUser(targetUser.id);
+  const handleToggleBan = async (targetUser: User) => {
+    const res = await authService.adminToggleBanUser(targetUser);
     if (!res.success) {
       showNotification('error', res.error || 'İşlem gerçekleştirilemedi.');
       return;
     }
     const actionText = res.newStatus === 'banned' ? 'askıya alındı' : 'aktifleştirildi';
-    showNotification('success', `${targetUser.name} (${targetUser.email}) hesabı başarıyla ${actionText}.`);
-    loadUsers();
+    showNotification('success', `${targetUser.name} (${targetUser.email}) hesabı Cloud Firestore üzerinde ${actionText}.`);
+    await loadUsers();
   };
 
-  const handleDeleteUser = (targetUser: User) => {
-    if (!window.confirm(`${targetUser.name} (${targetUser.email}) kullanıcısını silmek istediğinize emin misiniz?`)) {
+  const handleToggleRole = async (targetUser: User) => {
+    const nextRole: 'yonetici' | 'kullanici' = isAdminRole(targetUser.role) ? 'kullanici' : 'yonetici';
+    const res = await authService.adminUpdateUserRole(targetUser, nextRole);
+    if (!res.success) {
+      showNotification('error', res.error || 'Rol güncellenemedi.');
       return;
     }
-    const res = authService.adminDeleteUser(targetUser.id);
+    const roleLabel = nextRole === 'yonetici' ? 'YÖNETİCİ' : 'KULLANICI';
+    showNotification('success', `${targetUser.name} kullanıcısının rolü ${roleLabel} olarak güncellendi.`);
+    await loadUsers();
+  };
+
+  const handleDeleteUser = async (targetUser: User) => {
+    if (!window.confirm(`${targetUser.name} (${targetUser.email}) kullanıcısını Cloud Firestore'dan silmek istediğinize emin misiniz?`)) {
+      return;
+    }
+    const res = await authService.adminDeleteUser(targetUser);
     if (!res.success) {
       showNotification('error', res.error || 'Kullanıcı silinemedi.');
       return;
     }
-    showNotification('success', `${targetUser.name} kullanıcısı sistemden başarıyla silindi.`);
-    loadUsers();
+    showNotification('success', `${targetUser.name} kullanıcısı Cloud Firestore'dan başarıyla silindi.`);
+    await loadUsers();
   };
 
-  const handleCreateUser = (e: FormEvent) => {
+  const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
     setModalError('');
     setIsSubmitting(true);
 
-    const res = authService.adminCreateUser({
-      name: newName,
-      email: newEmail,
-      password: newPassword,
-      role: newRole,
-    });
+    try {
+      const res = await authService.adminCreateUser({
+        name: newName,
+        email: newEmail,
+        password: newPassword,
+        role: newRole,
+      });
 
-    setIsSubmitting(false);
+      if (!res.success) {
+        setModalError(res.error || 'Kullanıcı eklenirken bir hata oluştu.');
+        return;
+      }
 
-    if (!res.success) {
-      setModalError(res.error || 'Kullanıcı eklenirken bir hata oluştu.');
-      return;
+      showNotification('success', `${newName} kullanıcısı Firebase Auth ve Cloud Firestore'a eklendi.`);
+      setNewName('');
+      setNewEmail('');
+      setNewPassword('');
+      setNewRole('kullanici');
+      setIsModalOpen(false);
+      await loadUsers();
+    } catch (err) {
+      console.error('[AdminPage] Kullanıcı oluşturma hatası:', err);
+      setModalError('Kullanıcı eklenirken beklenmeyen bir hata oluştu.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    showNotification('success', `${newName} kullanıcısı başarıyla sisteme eklendi.`);
-    // Reset form
-    setNewName('');
-    setNewEmail('');
-    setNewPassword('');
-    setNewRole('user');
-    setIsModalOpen(false);
-    loadUsers();
   };
 
   const handleLogout = () => {
@@ -133,9 +163,9 @@ export function AdminPage() {
   });
 
   const totalUsersCount = users.length;
-  const activeUsersCount = users.filter((u) => u.status !== 'banned').length;
-  const bannedUsersCount = users.filter((u) => u.status === 'banned').length;
-  const adminUsersCount = users.filter((u) => u.role === 'admin' || u.email === 'admin@gmail.com').length;
+  const activeUsersCount = users.filter((u) => u.isActive !== false && u.status !== 'banned').length;
+  const bannedUsersCount = users.filter((u) => u.isActive === false || u.status === 'banned').length;
+  const adminUsersCount = users.filter((u) => isAdminRole(u.role)).length;
 
   return (
     <main className="admin-shell site-shell" style={{ minHeight: '100dvh', backgroundColor: '#0D0F12' }}>
@@ -210,7 +240,7 @@ export function AdminPage() {
                 Yönetici Paneli
               </h1>
               <p className="admin-subtitle">
-                LocalStorage üzerinde kayıtlı tüm kullanıcıları denetle, askıya al, sil veya sisteme yeni hesap tanımla.
+                Cloud Firestore üzerinde kayıtlı tüm kullanıcıları denetle, rolünü değiştir, askıya al, sil veya sisteme yeni hesap tanımla.
               </p>
             </div>
 
@@ -282,7 +312,7 @@ export function AdminPage() {
                 Kayıtlı Kullanıcı Listesi ({filteredUsers.length})
               </h2>
               <span className="mono" style={{ fontSize: '11px', color: '#888982' }}>
-                KAYNAK: window.localStorage ('kurumdan_insana_users_v1')
+                KAYNAK: Cloud Firestore ('users' koleksiyonu)
               </span>
             </div>
 
@@ -312,7 +342,8 @@ export function AdminPage() {
               <button
                 type="button"
                 className="quiet-btn"
-                onClick={loadUsers}
+                onClick={() => void loadUsers()}
+                disabled={isLoadingUsers}
                 title="Listeyi Yenile"
                 data-testid="button-refresh-users"
               >
@@ -342,8 +373,9 @@ export function AdminPage() {
                 </thead>
                 <tbody>
                   {filteredUsers.map((u) => {
-                    const isCurrentAdmin = u.id === user?.id || u.email.toLowerCase() === 'admin@gmail.com';
-                    const isBanned = u.status === 'banned';
+                    const isCurrentAdmin = u.id === user?.id || u.uid === user?.uid;
+                    const isBanned = u.isActive === false || u.status === 'banned';
+                    const isUserAdmin = isAdminRole(u.role);
 
                     return (
                       <tr key={u.id} data-testid={`row-user-${u.id}`}>
@@ -367,10 +399,10 @@ export function AdminPage() {
                         </td>
                         <td>
                           <span
-                            className={`role-pill mono ${u.role === 'admin' || u.email === 'admin@gmail.com' ? 'admin' : 'user'}`}
+                            className={`role-pill mono ${isUserAdmin ? 'admin' : 'user'}`}
                             data-testid={`badge-role-${u.id}`}
                           >
-                            {u.role === 'admin' || u.email === 'admin@gmail.com' ? 'YÖNETİCİ' : 'KULLANICI'}
+                            {isUserAdmin ? 'YÖNETİCİ' : 'KULLANICI'}
                           </span>
                         </td>
                         <td>
@@ -393,11 +425,23 @@ export function AdminPage() {
                           <div className="table-actions">
                             {!isCurrentAdmin ? (
                               <>
+                                {/* Role Toggle Button */}
+                                <button
+                                  type="button"
+                                  className="quiet-btn"
+                                  onClick={() => void handleToggleRole(u)}
+                                  data-testid={`button-role-user-${u.id}`}
+                                  title={isUserAdmin ? 'Kullanıcı Rolüne Düşür' : 'Yönetici Yap'}
+                                >
+                                  <Shield size={13} />
+                                  <span>{isUserAdmin ? 'Kullanıcı Yap' : 'Yönetici Yap'}</span>
+                                </button>
+
                                 {/* Ban / Unban Button */}
                                 <button
                                   type="button"
                                   className={`action-btn-ban ${isBanned ? 'unban' : 'ban'}`}
-                                  onClick={() => handleToggleBan(u)}
+                                  onClick={() => void handleToggleBan(u)}
                                   data-testid={`button-ban-user-${u.id}`}
                                   title={isBanned ? 'Kullanıcı Engelini Kaldır' : 'Kullanıcıyı Askıya Al'}
                                 >
@@ -418,7 +462,7 @@ export function AdminPage() {
                                 <button
                                   type="button"
                                   className="action-btn-delete"
-                                  onClick={() => handleDeleteUser(u)}
+                                  onClick={() => void handleDeleteUser(u)}
                                   data-testid={`button-delete-user-${u.id}`}
                                   title="Kullanıcıyı Tamamen Sil"
                                 >
@@ -469,7 +513,7 @@ export function AdminPage() {
               </div>
 
               <p className="admin-modal-desc">
-                Sisteme yönetici yetkisiyle doğrudan yeni kullanıcı hesabı ekleyin. Hesap anında LocalStorage'a yazılır.
+                Sisteme yönetici yetkisiyle doğrudan yeni kullanıcı hesabı ekleyin. Hesap doğrudan Firebase Auth ve Cloud Firestore'a kaydedilir.
               </p>
 
               {modalError && (
@@ -536,8 +580,8 @@ export function AdminPage() {
                     onChange={(e) => setNewRole(e.target.value as UserRole)}
                     data-testid="select-admin-role"
                   >
-                    <option value="user">Standart Kullanıcı (user)</option>
-                    <option value="admin">Yönetici (admin)</option>
+                    <option value="kullanici">Standart Kullanıcı (kullanici)</option>
+                    <option value="yonetici">Yönetici (yonetici)</option>
                   </select>
                 </div>
 

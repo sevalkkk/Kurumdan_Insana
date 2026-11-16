@@ -121,7 +121,6 @@ export interface ModerationLogItem {
   createdAt: number;
 }
 
-export function isAdminRole(role?: UserRole | string, email?: string): boolean {
-  if (email && email.trim().toLowerCase() === 'admin@gmail.com') return true;
+export function isAdminRole(role?: UserRole | string): boolean {
   return role === 'yonetici' || role === 'admin';
 }

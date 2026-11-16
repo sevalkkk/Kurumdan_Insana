@@ -130,7 +130,7 @@ export function ExplorePage() {
                 <Link className="nav-text-link" href="/history" data-testid="link-history">
                   Çevirilerim
                 </Link>
-                {isAdminRole(user?.role, user?.email) && (
+                {isAdminRole(user?.role) && (
                   <Link className="nav-admin-link" href="/admin" data-testid="link-admin-panel">
                     <Shield size={12} />
                     <span>Yönetici Paneli</span>
