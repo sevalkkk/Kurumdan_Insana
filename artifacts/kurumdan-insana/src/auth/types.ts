@@ -24,6 +24,8 @@ export interface User {
   bio?: string | null;
   consentAccepted?: boolean;
   publishedCount?: number;
+  dailyUsageDate?: string;
+  dailyUsageCount?: number;
   createdAt: number;
   updatedAt?: number;
 }

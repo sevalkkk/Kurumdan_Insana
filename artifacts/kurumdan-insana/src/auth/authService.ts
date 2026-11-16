@@ -332,9 +332,104 @@ function normalizeUserDoc(u: Partial<User> & { id?: string; uid?: string; email:
   };
 }
 
+export const DAILY_AI_LIMIT = 20;
+
 export const authService = {
   isCloudConnected(): boolean {
     return isFirebaseConfigured();
+  },
+
+  async checkAndIncrementDailyAiQuota(uid: string): Promise<{
+    allowed: boolean;
+    remaining: number;
+    count: number;
+    limit: number;
+    error?: string;
+  }> {
+    if (!uid) {
+      return {
+        allowed: false,
+        remaining: 0,
+        count: 0,
+        limit: DAILY_AI_LIMIT,
+        error: 'Yapay zekâ çeviri özelliğini kullanmak için lütfen giriş yapın.',
+      };
+    }
+
+    if (!isFirebaseConfigured()) {
+      return {
+        allowed: false,
+        remaining: 0,
+        count: 0,
+        limit: DAILY_AI_LIMIT,
+        error: 'Sunucu veritabanı bağlantısı yapılandırılmamış.',
+      };
+    }
+
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const session = this.getCurrentSession();
+    const token = fbAuth?.idToken || session?.token;
+    const targetUid = fbAuth?.localId || uid;
+    const today = new Date().toISOString().slice(0, 10);
+
+    const userDoc = await cloudFirestoreClient.getDoc<Record<string, unknown>>(
+      'users',
+      targetUid,
+      token,
+    );
+
+    if (!userDoc) {
+      return {
+        allowed: false,
+        remaining: 0,
+        count: 0,
+        limit: DAILY_AI_LIMIT,
+        error: 'Kullanıcı profili Cloud Firestore üzerinde bulunamadı. Lütfen tekrar giriş yapın.',
+      };
+    }
+
+    const currentDate = String(userDoc.dailyUsageDate || '');
+    const currentCount = currentDate === today ? Number(userDoc.dailyUsageCount || 0) : 0;
+
+    if (currentCount >= DAILY_AI_LIMIT) {
+      return {
+        allowed: false,
+        remaining: 0,
+        count: currentCount,
+        limit: DAILY_AI_LIMIT,
+        error: `Günlük yapay zekâ çeviri sınırınıza (${DAILY_AI_LIMIT}/${DAILY_AI_LIMIT}) ulaştınız. Yarın tekrar deneyebilirsiniz.`,
+      };
+    }
+
+    const nextCount = currentCount + 1;
+    const updated = await cloudFirestoreClient.setDoc(
+      'users',
+      targetUid,
+      {
+        ...userDoc,
+        dailyUsageDate: today,
+        dailyUsageCount: nextCount,
+        updatedAt: Date.now(),
+      },
+      token,
+    );
+
+    if (!updated) {
+      return {
+        allowed: false,
+        remaining: Math.max(0, DAILY_AI_LIMIT - currentCount),
+        count: currentCount,
+        limit: DAILY_AI_LIMIT,
+        error: 'Günlük kullanım kotası güncellenemedi. Lütfen tekrar deneyin.',
+      };
+    }
+
+    return {
+      allowed: true,
+      remaining: Math.max(0, DAILY_AI_LIMIT - nextCount),
+      count: nextCount,
+      limit: DAILY_AI_LIMIT,
+    };
   },
 
   /**

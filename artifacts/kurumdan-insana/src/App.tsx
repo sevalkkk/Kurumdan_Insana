@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Link, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { authService } from './auth/authService';
 import { isAdminRole } from './auth/types';
 import { SignUpPage } from './auth/SignUpPage';
 import { LoginPage } from './auth/LoginPage';
@@ -31,7 +32,6 @@ import NotFound from './pages/not-found';
 import {
   SAMPLE_TEXTS,
   TONE_OPTIONS,
-  translateText,
   type TranslationTone,
 } from './translation';
 
@@ -84,6 +84,8 @@ function HomePage() {
   const [copied, setCopied] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
 
+  const [dailyRemaining, setDailyRemaining] = useState<number | null>(null);
+
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const sampleIndexRef = useRef(0);
 
@@ -98,21 +100,17 @@ function HomePage() {
   const chooseExample = (text: string) => {
     setInput(text);
     setErrorMessage('');
-    executeTranslation(text, tone);
+    void executeTranslation(text, tone);
   };
 
   const handleToneChange = (newTone: TranslationTone) => {
     setTone(newTone);
-    if (submittedText.trim()) {
-      const updated = translateText(submittedText.trim(), newTone);
-      setResult(updated);
-      if (isAuthenticated) {
-        saveTranslation(submittedText.trim(), updated);
-      }
+    if (submittedText.trim() && isAuthenticated) {
+      void executeTranslation(submittedText.trim(), newTone);
     }
   };
 
-  const executeTranslation = (textToTranslate = input, currentTone = tone) => {
+  const executeTranslation = async (textToTranslate = input, currentTone = tone) => {
     const clean = textToTranslate.trim();
     if (!clean) {
       setErrorMessage('Lütfen çevrilecek bir kurumsal metin girin.');
@@ -122,22 +120,61 @@ function HomePage() {
       return;
     }
 
+    if (!isAuthenticated || !user) {
+      setErrorMessage('Yapay zekâ çeviri özelliğini kullanmak için lütfen giriş yapın veya kayıt olun.');
+      return;
+    }
+
     setErrorMessage('');
     setIsTranslating(true);
 
-    const translated = translateText(clean, currentTone);
-    setResult(translated);
-    setSubmittedText(clean);
-    setIsTranslating(false);
+    try {
+      const uid = user.uid || user.id;
+      const quota = await authService.checkAndIncrementDailyAiQuota(uid);
+      if (!quota.allowed) {
+        setErrorMessage(
+          quota.error || 'Günlük yapay zekâ çeviri sınırınıza (20/20) ulaştınız.',
+        );
+        setDailyRemaining(0);
+        return;
+      }
+      setDailyRemaining(quota.remaining);
 
-    if (isAuthenticated) {
-      saveTranslation(clean, translated);
+      const response = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: clean,
+          tone: currentTone,
+        }),
+      });
+
+      const data = (await response.json().catch(() => ({}))) as {
+        translatedText?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !data.translatedText) {
+        setErrorMessage(
+          data.error || 'Yapay zekâ yanıtı alınırken bir hata oluştu. Lütfen tekrar deneyin.',
+        );
+        return;
+      }
+
+      setResult(data.translatedText);
+      setSubmittedText(clean);
+      saveTranslation(clean, data.translatedText, currentTone);
+    } catch (err) {
+      console.error('[Translator] Çeviri isteği hatası:', err);
+      setErrorMessage('Çeviri sunucusuna bağlanırken bir hata oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setIsTranslating(false);
     }
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    executeTranslation();
+    void executeTranslation();
   };
 
   const newSentence = () => {
@@ -286,8 +323,12 @@ function HomePage() {
                 />
 
                 <div className="translator-foot">
-                  <span>Hiçbir yere gönderilmez. Doğrudan tarayıcında işlenir.</span>
-                  <span className="char-count" data-testid="text-character-count">{input.length} / 1000</span>
+                  <span>
+                    Kişisel veri (TCKN, telefon, şifre, müşteri bilgisi) paylaşmayınız. İstekler sunucu üzerinden yapay zekâya iletilir.
+                  </span>
+                  <span className="char-count" data-testid="text-character-count">
+                    {dailyRemaining !== null ? `Kalan hak: ${dailyRemaining}/20 · ` : ''}{input.length} / 1000
+                  </span>
                 </div>
 
                 {/* Tone Selector Buttons: Samimi Kanka, Bıkkın Çalışan, Dürüst Yönetici */}
@@ -322,6 +363,31 @@ function HomePage() {
                   </div>
                 )}
 
+                {/* Loading Status Message */}
+                {isTranslating && (
+                  <div
+                    className="translator-loading-banner"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="loading-translator"
+                    style={{
+                      marginTop: '14px',
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(184, 255, 1, 0.35)',
+                      background: 'rgba(184, 255, 1, 0.08)',
+                      color: '#b8ff01',
+                      fontSize: '13px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    <Sparkles size={15} />
+                    <span>Cümleniz insan diline çevriliyor...</span>
+                  </div>
+                )}
+
                 {/* Translate Button: İç Sese Çevir */}
                 <button
                   className="submit-btn"
@@ -330,7 +396,7 @@ function HomePage() {
                   type="submit"
                   disabled={isTranslating}
                 >
-                  {isTranslating ? 'İç Sese Dönüştürülüyor…' : 'İç Sese Çevir ➔'}
+                  {isTranslating ? 'Cümleniz insan diline çevriliyor...' : 'İç Sese Çevir ➔'}
                   <span>CTRL + ENTER</span>
                 </button>
               </form>
@@ -394,6 +460,17 @@ function HomePage() {
                     </div>
                     <p className="result-inner-voice-text" data-testid="text-translation-result">
                       {result}
+                    </p>
+                    <p
+                      className="mono"
+                      data-testid="text-ai-disclaimer"
+                      style={{
+                        marginTop: '10px',
+                        fontSize: '11px',
+                        color: '#9aa092',
+                      }}
+                    >
+                      Yapay zekâ önerisidir, kontrol ediniz.
                     </p>
                   </div>
 

@@ -3,7 +3,7 @@
   "outputDirectory": "artifacts/kurumdan-insana/dist/public",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]
