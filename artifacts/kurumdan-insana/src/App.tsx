@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Link, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { isAdminRole } from './auth/types';
 import { SignUpPage } from './auth/SignUpPage';
 import { LoginPage } from './auth/LoginPage';
 import { ForgotPasswordPage } from './auth/ForgotPasswordPage';
@@ -206,10 +207,10 @@ function HomePage() {
                   <Link className="nav-text-link" href="/tools" data-testid="link-tools">
                     Araçlar
                   </Link>
-                  {(user?.role === 'admin' || user?.email === 'admin@gmail.com') && (
+                  {isAdminRole(user?.role) && (
                     <Link className="nav-admin-link" href="/admin" data-testid="link-admin-panel">
                       <Shield size={12} />
-                      <span>Yönetici</span>
+                      <span>Admin Panel</span>
                     </Link>
                   )}
                   <span className="user-badge" data-testid="nav-user-name">
