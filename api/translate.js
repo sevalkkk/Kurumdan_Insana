@@ -55,7 +55,7 @@ module.exports = async function handler(req, res) {
     ].join('\n');
 
     const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey.trim())}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey.trim())}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,7 +93,7 @@ module.exports = async function handler(req, res) {
 
     return res.status(200).json({
       translatedText,
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
     });
   } catch (err) {
     console.error('[api/translate] Sunucu hatası:', err);
