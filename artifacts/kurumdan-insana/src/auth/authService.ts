@@ -7,7 +7,13 @@ import type {
   LoginInput,
   FieldErrors,
   TranslationHistoryItem,
+  TranslationStatus,
+  FavoriteItem,
+  LikeItem,
+  ModerationLogItem,
 } from './types';
+import { isAdminRole } from './types';
+import type { TranslationTone } from '../translation';
 import {
   DUPLICATE_EMAIL_MESSAGE,
   GENERIC_LOGIN_ERROR,
@@ -17,10 +23,18 @@ import {
   validateForgotPassword,
   isValidEmail,
 } from './registrationValidation';
+import {
+  cloudFirestoreClient,
+  firebaseAuthClient,
+  isFirebaseConfigured,
+} from '../lib/firebase';
 
 export const USERS_STORAGE_KEY = 'kurumdan_insana_users_v1';
 export const SESSION_STORAGE_KEY = 'kurumdan_insana_session_v1';
 export const HISTORY_STORAGE_KEY = 'kurumdan_insana_history_v1';
+export const FAVORITES_STORAGE_KEY = 'kurumdan_insana_favorites_v1';
+export const LIKES_STORAGE_KEY = 'kurumdan_insana_likes_v1';
+export const MODERATION_LOGS_STORAGE_KEY = 'kurumdan_insana_moderation_logs_v1';
 export const RESETS_STORAGE_KEY = 'kurumdan_insana_resets_v1';
 
 const AUTH_SALT = 'kurumdan_insana_salt_2026_';
@@ -62,10 +76,6 @@ function safeRemoveItem(key: string): void {
   delete memoryStore[key];
 }
 
-/**
- * Synchronous, standard SHA-256 implementation
- * Guarantees zero external dependencies and eliminates storing plain-text passwords in LocalStorage.
- */
 function rightRotate(value: number, amount: number): number {
   return (value >>> amount) | (value << (32 - amount));
 }
@@ -75,7 +85,7 @@ export function sha256Sync(raw: string): string {
   const words: number[] = [];
   const asciiBitLength = ascii.length * 8;
 
-  let hash = [
+  const hash = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
   ];
@@ -150,48 +160,209 @@ export function sha256Sync(raw: string): string {
   return result;
 }
 
-/**
- * Hashes a user password using a unique salt and SHA-256
- */
 export function hashPassword(password: string): string {
   return sha256Sync(`${AUTH_SALT}${password}`);
 }
 
-/**
- * Validates password with backwards-compatible support for legacy or newly hashed passwords
- */
 function verifyPassword(inputPassword: string, user: User): boolean {
   const hashedInput = hashPassword(inputPassword);
   if (user.passwordHash && user.passwordHash === hashedInput) {
     return true;
   }
-  // Backwards compatibility with unhashed legacy accounts if present
   if (user.password && (user.password === inputPassword || user.password === hashedInput)) {
     return true;
   }
   return false;
 }
 
+function normalizeCorporateForSearch(value: string): string {
+  return value
+    .toLocaleLowerCase('tr-TR')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/ı/g, 'i')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const DEFAULT_USERS: User[] = [
   {
+    uid: 'usr_admin_master',
     id: 'usr_admin_master',
+    displayName: 'Sistem Yöneticisi',
     name: 'Sistem Yöneticisi',
     email: 'admin@gmail.com',
     passwordHash: hashPassword('admin123'),
-    role: 'admin',
+    role: 'yonetici',
+    isActive: true,
     status: 'active',
+    consentAccepted: true,
+    publishedCount: 0,
     createdAt: 1730000000000,
+    updatedAt: 1730000000000,
   },
   {
+    uid: 'usr_demo_plaza',
     id: 'usr_demo_plaza',
+    displayName: 'Deniz Kaya',
     name: 'Deniz Kaya',
     email: 'deniz@sirket.com',
     passwordHash: hashPassword('Password123!'),
-    role: 'user',
+    role: 'kullanici',
+    isActive: true,
     status: 'active',
+    consentAccepted: true,
+    publishedCount: 0,
     createdAt: 1730000000000,
+    updatedAt: 1730000000000,
   },
 ];
+
+const DEFAULT_PUBLISHED_TRANSLATIONS: TranslationHistoryItem[] = [
+  {
+    id: 'tr_seed_pub_1',
+    userId: 'usr_community_1',
+    authorId: 'usr_community_1',
+    authorName: 'Selin Aksoy',
+    isAnonymous: false,
+    corporate: 'Bir araya gelip hizalanalım, proaktif aksiyon alıp konuyu bir sonraki sprintte ele alalım.',
+    corporateText: 'Bir araya gelip hizalanalım, proaktif aksiyon alıp konuyu bir sonraki sprintte ele alalım.',
+    normalizedText: 'bir araya gelip hizalanalim proaktif aksiyon alip konuyu bir sonraki sprintte ele alalim',
+    human: 'Kanka olay şu: Herkes başka bir şey anlamış, bir saat lak lak edip bir toplantı daha çıkaracağız.',
+    translatedText: 'Kanka olay şu: Herkes başka bir şey anlamış, bir saat lak lak edip bir toplantı daha çıkaracağız.',
+    tone: 'samimi-kanka',
+    status: 'yayinda',
+    rejectionReason: null,
+    reviewedBy: 'usr_admin_master',
+    reviewedAt: 1730200000000,
+    likeCount: 24,
+    favoriteCount: 8,
+    createdAt: 1730190000000,
+    updatedAt: 1730200000000,
+    publishedAt: 1730200000000,
+  },
+  {
+    id: 'tr_seed_pub_2',
+    userId: 'usr_community_2',
+    authorId: 'usr_community_2',
+    authorName: 'Anonim Çalışan',
+    isAnonymous: true,
+    corporate: 'Takvimlerimize davet düşüyorum, sinerjimizi artırmak adına kısa bir sync rica ediyorum.',
+    corporateText: 'Takvimlerimize davet düşüyorum, sinerjimizi artırmak adına kısa bir sync rica ediyorum.',
+    normalizedText: 'takvimlerimize davet dusuyorum sinerjimizi artirmak adina kisa bir sync rica ediyorum',
+    human: 'Günün en verimli saatini daha buharlaştırıyorum. Masada kamerası kapalı oturacağız.',
+    translatedText: 'Günün en verimli saatini daha buharlaştırıyorum. Masada kamerası kapalı oturacağız.',
+    tone: 'bikkin-calisan',
+    status: 'yayinda',
+    rejectionReason: null,
+    reviewedBy: 'usr_admin_master',
+    reviewedAt: 1730350000000,
+    likeCount: 42,
+    favoriteCount: 15,
+    createdAt: 1730340000000,
+    updatedAt: 1730350000000,
+    publishedAt: 1730350000000,
+  },
+  {
+    id: 'tr_seed_pub_3',
+    userId: 'usr_community_3',
+    authorId: 'usr_community_3',
+    authorName: 'Mert Korkmaz',
+    isAnonymous: false,
+    corporate: 'Bütçe kısıtları nedeniyle kadro artışı yapamıyoruz ancak mevcut verimliliğimizi artırabiliriz.',
+    corporateText: 'Bütçe kısıtları nedeniyle kadro artışı yapamıyoruz ancak mevcut verimliliğimizi artırabiliriz.',
+    normalizedText: 'butce kisitlari nedeniyle kadro artisi yapamiyoruz ancak mevcut verimliligimizi artirabiliriz',
+    human: 'Bütçeyi başka yere harcadık. Size zam veremem ama LinkedIn’de havalı bir unvan ve yeni sorumluluklar verebilirim.',
+    translatedText: 'Bütçeyi başka yere harcadık. Size zam veremem ama LinkedIn’de havalı bir unvan ve yeni sorumluluklar verebilirim.',
+    tone: 'durust-yonetici',
+    status: 'yayinda',
+    rejectionReason: null,
+    reviewedBy: 'usr_admin_master',
+    reviewedAt: 1730500000000,
+    likeCount: 18,
+    favoriteCount: 5,
+    createdAt: 1730490000000,
+    updatedAt: 1730500000000,
+    publishedAt: 1730500000000,
+  },
+  {
+    id: 'tr_seed_pending_1',
+    userId: 'usr_community_4',
+    authorId: 'usr_community_4',
+    authorName: 'Emre Aydın',
+    isAnonymous: false,
+    corporate: 'Konuyu şimdilik park edelim, stakeholder feedbackleri doğrultusunda roadmapimizi optimize ederiz.',
+    corporateText: 'Konuyu şimdilik park edelim, stakeholder feedbackleri doğrultusunda roadmapimizi optimize ederiz.',
+    normalizedText: 'konuyu simdilik park edelim stakeholder feedbackleri dogrultusunda roadmapimizi optimize ederiz',
+    human: 'Kanka bunu sessizce rafa kaldıralım, kimse hatırlamazsa sonsuza dek unutulur.',
+    translatedText: 'Kanka bunu sessizce rafa kaldıralım, kimse hatırlamazsa sonsuza dek unutulur.',
+    tone: 'samimi-kanka',
+    status: 'onay_bekliyor',
+    rejectionReason: null,
+    reviewedBy: null,
+    reviewedAt: null,
+    likeCount: 0,
+    favoriteCount: 0,
+    createdAt: 1730100000000,
+    updatedAt: 1730100000000,
+    publishedAt: null,
+  },
+  {
+    id: 'tr_seed_pending_2',
+    userId: 'usr_community_5',
+    authorId: 'usr_community_5',
+    authorName: 'Anonim Çalışan',
+    isAnonymous: true,
+    corporate: 'Müşteri tarafındaki deadline nedeniyle bu konuyu ASAP çözmemiz gerekiyor, sahiplenme rica ediyorum.',
+    corporateText: 'Müşteri tarafındaki deadline nedeniyle bu konuyu ASAP çözmemiz gerekiyor, sahiplenme rica ediyorum.',
+    normalizedText: 'musteri tarafindaki deadline nedeniyle bu konuyu asap cozmemiz gerekiyor sahiplenme rica ediyorum',
+    human: 'Planlama beceriksizliği son dakikada yine benim kişisel acil durumum hâline getirildi.',
+    translatedText: 'Planlama beceriksizliği son dakikada yine benim kişisel acil durumum hâline getirildi.',
+    tone: 'bikkin-calisan',
+    status: 'onay_bekliyor',
+    rejectionReason: null,
+    reviewedBy: null,
+    reviewedAt: null,
+    likeCount: 0,
+    favoriteCount: 0,
+    createdAt: 1730150000000,
+    updatedAt: 1730150000000,
+    publishedAt: null,
+  },
+];
+
+function normalizeUserDoc(u: Partial<User> & { id?: string; uid?: string; email: string; name?: string }): User {
+  const uid = u.uid || u.id || `usr_${Date.now()}`;
+  const displayName = u.displayName || u.name || u.email.split('@')[0];
+  const isAdmin = isAdminRole(u.role, u.email);
+  const role: UserRole = isAdmin ? 'yonetici' : 'kullanici';
+
+  const isBanned = u.isActive === false || u.status === 'banned';
+  const isActive = !isBanned;
+  const status: UserStatus = isActive ? 'active' : 'banned';
+
+  const passwordHash =
+    u.passwordHash || (u.password ? hashPassword(u.password) : '');
+
+  return {
+    uid,
+    id: uid,
+    displayName,
+    name: displayName,
+    email: u.email,
+    passwordHash,
+    role,
+    isActive,
+    status,
+    avatarUrl: u.avatarUrl ?? null,
+    bio: u.bio ?? null,
+    consentAccepted: u.consentAccepted ?? true,
+    publishedCount: u.publishedCount ?? 0,
+    createdAt: u.createdAt || Date.now(),
+    updatedAt: u.updatedAt || u.createdAt || Date.now(),
+  };
+}
 
 function initUsers(): User[] {
   const stored = safeGetItem(USERS_STORAGE_KEY);
@@ -203,42 +374,29 @@ function initUsers(): User[] {
     const parsed = JSON.parse(stored);
     if (Array.isArray(parsed) && parsed.length > 0) {
       let modified = false;
-      const normalized = parsed.map((u: User) => {
-        let userMod = false;
-        let passwordHash = u.passwordHash;
-        if (!passwordHash && u.password) {
-          passwordHash = hashPassword(u.password);
-          userMod = true;
-        }
-
-        const role: UserRole = u.role || (u.email.toLowerCase() === 'admin@gmail.com' ? 'admin' : 'user');
-        const status: UserStatus = u.status || 'active';
-
-        if (role !== u.role || status !== u.status || userMod) {
+      const normalized = parsed.map((rawUser: User) => {
+        const norm = normalizeUserDoc(rawUser);
+        if (
+          rawUser.uid !== norm.uid ||
+          rawUser.isActive !== norm.isActive ||
+          rawUser.role !== norm.role ||
+          rawUser.status !== norm.status ||
+          !rawUser.passwordHash
+        ) {
           modified = true;
-          return {
-            id: u.id,
-            name: u.name,
-            email: u.email,
-            passwordHash,
-            role,
-            status,
-            createdAt: u.createdAt || Date.now(),
-          };
         }
-        return u;
+        return norm;
       });
 
-      // Ensure master admin user always exists and has admin privileges
       const adminDefault = DEFAULT_USERS.find((u) => u.email === 'admin@gmail.com')!;
       const adminFound = normalized.find(
-        (u: User) => u.email.toLowerCase() === 'admin@gmail.com'
+        (u: User) => u.email.toLowerCase() === 'admin@gmail.com',
       );
       if (!adminFound) {
         normalized.unshift(adminDefault);
         modified = true;
-      } else if (adminFound.role !== 'admin' || !adminFound.passwordHash) {
-        adminFound.role = 'admin';
+      } else if (!isAdminRole(adminFound.role, adminFound.email) || !adminFound.passwordHash) {
+        adminFound.role = 'yonetici';
         adminFound.passwordHash = adminDefault.passwordHash;
         modified = true;
       }
@@ -249,15 +407,31 @@ function initUsers(): User[] {
       return normalized;
     }
   } catch {
-    // corrupted, reset to default
+    // reset on corruption
   }
   safeSetItem(USERS_STORAGE_KEY, JSON.stringify(DEFAULT_USERS));
   return DEFAULT_USERS;
 }
 
 export const authService = {
+  isCloudConnected(): boolean {
+    return isFirebaseConfigured();
+  },
+
+  /**
+   * Firestore `users` koleksiyonundaki tüm dokümanları getirir
+   */
   getUsers(): User[] {
     return initUsers();
+  },
+
+  /**
+   * Belirli bir uid değerine sahip kullanıcı dokümanını `users/{uid}` koleksiyonundan getirir
+   */
+  getUserByUid(uid: string): User | null {
+    if (!uid) return null;
+    const users = this.getUsers();
+    return users.find((u) => u.uid === uid || u.id === uid) || null;
   },
 
   getCurrentSession(): UserSession | null {
@@ -265,13 +439,20 @@ export const authService = {
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && parsed.id && parsed.email) {
-        // Enforce 7-day session expiration
+      if (parsed && typeof parsed === 'object' && (parsed.uid || parsed.id) && parsed.email) {
         if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
           safeRemoveItem(SESSION_STORAGE_KEY);
           return null;
         }
-        return parsed as UserSession;
+        const uid = parsed.uid || parsed.id;
+        return {
+          ...parsed,
+          uid,
+          id: uid,
+          displayName: parsed.displayName || parsed.name,
+          name: parsed.name || parsed.displayName,
+          isActive: parsed.isActive ?? true,
+        } as UserSession;
       }
     } catch {
       safeRemoveItem(SESSION_STORAGE_KEY);
@@ -290,12 +471,12 @@ export const authService = {
     }
   },
 
-  signUp(input: SignUpInput): {
+  async signUp(input: SignUpInput): Promise<{
     success: boolean;
     user?: UserSession;
     error?: string;
     fieldErrors?: FieldErrors;
-  } {
+  }> {
     const fieldErrors = validateRegistration(input);
     if (Object.keys(fieldErrors).length > 0) {
       return { success: false, fieldErrors };
@@ -315,41 +496,120 @@ export const authService = {
       };
     }
 
-    // Securely hash password before saving to LocalStorage
+    const now = Date.now();
+    let uid = `usr_${now}_${Math.random().toString(36).substring(2, 7)}`;
+    let firebaseUid: string | undefined;
+    let sessionToken = `sess_${now}_${Math.random().toString(36).substring(2, 10)}`;
+
+    if (isFirebaseConfigured()) {
+      console.info('[AuthService] Firebase Auth ile kayıt başlatılıyor:', normalizedEmail);
+      const fbRes = await firebaseAuthClient.signUpWithEmailPasswordResult(
+        normalizedEmail,
+        input.password,
+      );
+
+      if (!fbRes.ok) {
+        if (fbRes.errorCode === 'EMAIL_EXISTS') {
+          return {
+            success: false,
+            error: DUPLICATE_EMAIL_MESSAGE,
+          };
+        }
+        if (!fbRes.isNetworkError) {
+          return {
+            success: false,
+            error: `Kayıt işlemi tamamlanamadı (${fbRes.errorCode}). Lütfen bilgilerinizi kontrol edin.`,
+          };
+        }
+        console.warn('[AuthService] Ağ/ortam nedeniyle yerel kayıt yedeğine düşüldü:', fbRes.errorCode);
+      } else {
+        firebaseUid = fbRes.data.localId;
+        uid = fbRes.data.localId;
+        sessionToken = fbRes.data.idToken;
+      }
+    } else {
+      console.warn('[AuthService] Firebase yapılandırılmamış (VITE_FIREBASE_* eksik). Yalnızca yerel kayıt yapılıyor.');
+    }
+
+    // Firestore `users` koleksiyonu dokümanı: role: 'kullanici', isActive: true, createdAt
     const newUser: User = {
-      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      uid,
+      id: uid,
+      firebaseUid,
+      displayName: input.name.trim(),
       name: input.name.trim(),
       email: normalizedEmail,
       passwordHash: hashPassword(input.password),
-      role: 'user',
+      role: 'kullanici',
+      isActive: true,
       status: 'active',
-      createdAt: Date.now(),
+      consentAccepted: Boolean(input.consent),
+      publishedCount: 0,
+      createdAt: now,
+      updatedAt: now,
     };
 
     users.push(newUser);
     safeSetItem(USERS_STORAGE_KEY, JSON.stringify(users));
 
-    // Create session (without storing password or hash in session object)
+    // Firestore `users/{uid}` dokümanını role: 'kullanici' ile oluştur
+    if (isFirebaseConfigured() && firebaseUid) {
+      const docToSync: Record<string, unknown> = {
+        uid: firebaseUid,
+        id: firebaseUid,
+        appUid: firebaseUid,
+        displayName: newUser.displayName,
+        name: newUser.name,
+        email: newUser.email,
+        passwordHash: newUser.passwordHash,
+        role: 'kullanici',
+        isActive: true,
+        status: 'active',
+        consentAccepted: newUser.consentAccepted,
+        publishedCount: 0,
+        createdAt: newUser.createdAt,
+        updatedAt: newUser.updatedAt,
+      };
+      const saved = await cloudFirestoreClient.setDoc(
+        'users',
+        firebaseUid,
+        docToSync,
+        sessionToken,
+      );
+      if (saved) {
+        console.info('[Firestore] users/{uid} profil dokümanı oluşturuldu:', firebaseUid);
+      } else {
+        console.error('[Firestore] users/{uid} profil dokümanı oluşturulamadı:', firebaseUid);
+      }
+      await this.syncFromCloud();
+    }
+
     const session: UserSession = {
+      uid: newUser.uid,
       id: newUser.id,
+      displayName: newUser.displayName,
       name: newUser.name,
       email: newUser.email,
-      role: 'user',
-      token: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`,
-      loggedInAt: Date.now(),
-      expiresAt: Date.now() + SESSION_EXPIRY_MS,
+      role: 'kullanici',
+      isActive: true,
+      token: sessionToken,
+      loggedInAt: now,
+      expiresAt: now + SESSION_EXPIRY_MS,
     };
 
     this.setCurrentSession(session);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('auth_users_updated'));
+    }
     return { success: true, user: session };
   },
 
-  login(input: LoginInput): {
+  async login(input: LoginInput): Promise<{
     success: boolean;
     user?: UserSession;
     error?: string;
     fieldErrors?: Partial<Record<'email' | 'password', string>>;
-  } {
+  }> {
     const fieldErrors = validateLogin(input);
     if (Object.keys(fieldErrors).length > 0) {
       return { success: false, fieldErrors };
@@ -357,14 +617,157 @@ export const authService = {
 
     const users = this.getUsers();
     const normalizedEmail = input.email.trim().toLowerCase();
-
-    const user = users.find(
-      (u) =>
-        u.email.trim().toLowerCase() === normalizedEmail &&
-        verifyPassword(input.password, u),
+    const localUser = users.find(
+      (u) => u.email.trim().toLowerCase() === normalizedEmail,
     );
 
-    if (!user) {
+    if (localUser && localUser.status === 'banned') {
+      return {
+        success: false,
+        error: 'Hesabınız askıya alınmıştır. Lütfen yönetici ile iletişime geçin.',
+      };
+    }
+
+    const now = Date.now();
+
+    if (isFirebaseConfigured()) {
+      console.info('[AuthService] Firebase Auth ile giriş başlatılıyor:', normalizedEmail);
+      let fbRes = await firebaseAuthClient.signInWithEmailPasswordResult(
+        normalizedEmail,
+        input.password,
+      );
+
+      // Varsayılan demo/admin hesabı henüz Firebase Auth'ta yoksa ve yerel şifre tutuyorsa otomatik oluştur
+      if (
+        !fbRes.ok &&
+        !fbRes.isNetworkError &&
+        localUser &&
+        verifyPassword(input.password, localUser) &&
+        (fbRes.errorCode === 'INVALID_LOGIN_CREDENTIALS' ||
+          fbRes.errorCode === 'EMAIL_NOT_FOUND' ||
+          fbRes.errorCode === 'INVALID_PASSWORD')
+      ) {
+        console.info('[AuthService] Yerel hesap Firebase Auth üzerinde oluşturuluyor:', normalizedEmail);
+        fbRes = await firebaseAuthClient.signUpWithEmailPasswordResult(
+          normalizedEmail,
+          input.password,
+        );
+      }
+
+      if (fbRes.ok) {
+        const fbAuth = fbRes.data;
+        const existingProfile = await cloudFirestoreClient.getDoc<Record<string, unknown>>(
+          'users',
+          fbAuth.localId,
+          fbAuth.idToken,
+        );
+
+        const isAdminEmail = normalizedEmail === 'admin@gmail.com';
+        let resolvedRole: UserRole =
+          localUser?.role === 'admin' || isAdminEmail ? 'admin' : 'user';
+        let resolvedStatus: UserStatus = 'active';
+        let resolvedName =
+          localUser?.name || normalizedEmail.split('@')[0];
+
+        if (!existingProfile) {
+          const firestoreRole = resolvedRole === 'admin' ? 'yonetici' : 'kullanici';
+          const created = await cloudFirestoreClient.setDoc(
+            'users',
+            fbAuth.localId,
+            {
+              uid: fbAuth.localId,
+              id: fbAuth.localId,
+              displayName: resolvedName,
+              name: resolvedName,
+              email: normalizedEmail,
+              role: firestoreRole,
+              isActive: true,
+              status: 'active',
+              createdAt: localUser?.createdAt || now,
+              updatedAt: now,
+            },
+            fbAuth.idToken,
+          );
+          if (!created) {
+            console.error('[Firestore] İlk girişte users/{uid} dokümanı oluşturulamadı:', fbAuth.localId);
+          }
+        } else {
+          const cloudRole = String(existingProfile.role || '').toLowerCase();
+          resolvedRole =
+            cloudRole === 'yonetici' || cloudRole === 'admin' || isAdminEmail
+              ? 'admin'
+              : 'user';
+          const isActive =
+            existingProfile.isActive !== false && existingProfile.status !== 'banned';
+          resolvedStatus = isActive ? 'active' : 'banned';
+          resolvedName = String(
+            existingProfile.displayName || existingProfile.name || resolvedName,
+          );
+        }
+
+        if (resolvedStatus === 'banned') {
+          this.logout();
+          return {
+            success: false,
+            error: 'Hesabınız askıya alınmıştır. Lütfen yönetici ile iletişime geçin.',
+          };
+        }
+
+        const updatedUsers = this.getUsers();
+        const idx = updatedUsers.findIndex((u) => u.email.toLowerCase() === normalizedEmail);
+        const syncedId = localUser?.uid || localUser?.id || fbAuth.localId;
+        const syncedIsActive = resolvedStatus === 'active';
+        const syncedUser: User = {
+          uid: syncedId,
+          id: syncedId,
+          firebaseUid: fbAuth.localId,
+          displayName: resolvedName,
+          name: resolvedName,
+          email: normalizedEmail,
+          passwordHash: localUser?.passwordHash || hashPassword(input.password),
+          role: resolvedRole,
+          isActive: syncedIsActive,
+          status: resolvedStatus,
+          createdAt: localUser?.createdAt || now,
+          updatedAt: now,
+        };
+        if (idx >= 0) {
+          updatedUsers[idx] = { ...updatedUsers[idx], ...syncedUser };
+        } else {
+          updatedUsers.push(syncedUser);
+        }
+        safeSetItem(USERS_STORAGE_KEY, JSON.stringify(updatedUsers));
+
+        const session: UserSession = {
+          uid: syncedId,
+          id: syncedId,
+          displayName: resolvedName,
+          name: resolvedName,
+          email: normalizedEmail,
+          role: resolvedRole,
+          isActive: syncedIsActive,
+          token: fbAuth.idToken,
+          loggedInAt: now,
+          expiresAt: now + SESSION_EXPIRY_MS,
+        };
+
+        this.setCurrentSession(session);
+        await this.syncFromCloud();
+        return { success: true, user: session };
+      }
+
+      if (!fbRes.isNetworkError) {
+        return {
+          success: false,
+          error: GENERIC_LOGIN_ERROR,
+        };
+      }
+      console.warn('[AuthService] Ağ/ortam nedeniyle yerel giriş yedeğine düşüldü:', fbRes.errorCode);
+    } else {
+      console.warn('[AuthService] Firebase yapılandırılmamış. Yalnızca yerel giriş kontrolü yapılıyor.');
+    }
+
+    if (!localUser || !verifyPassword(input.password, localUser)) {
       // Secure generic error message
       return {
         success: false,
@@ -372,23 +775,19 @@ export const authService = {
       };
     }
 
-    if (user.status === 'banned') {
-      return {
-        success: false,
-        error: 'Hesabınız askıya alınmıştır. Lütfen yönetici ile iletişime geçin.',
-      };
-    }
-
-    const role: UserRole = user.role || (normalizedEmail === 'admin@gmail.com' ? 'admin' : 'user');
-
+    const role: UserRole = localUser.role || (normalizedEmail === 'admin@gmail.com' ? 'yonetici' : 'kullanici');
+    const localUid = localUser.uid || localUser.id;
     const session: UserSession = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
+      uid: localUid,
+      id: localUid,
+      displayName: localUser.displayName || localUser.name,
+      name: localUser.name,
+      email: localUser.email,
       role,
-      token: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`,
-      loggedInAt: Date.now(),
-      expiresAt: Date.now() + SESSION_EXPIRY_MS,
+      isActive: localUser.isActive ?? true,
+      token: `sess_${now}_${Math.random().toString(36).substring(2, 10)}`,
+      loggedInAt: now,
+      expiresAt: now + SESSION_EXPIRY_MS,
     };
 
     this.setCurrentSession(session);
@@ -409,7 +808,6 @@ export const authService = {
       };
     }
 
-    // Record reset request audit log in LocalStorage
     const users = this.getUsers();
     const normalizedEmail = email.trim().toLowerCase();
     const exists = users.some((u) => u.email.toLowerCase() === normalizedEmail);
@@ -427,9 +825,11 @@ export const authService = {
       } catch {
         // ignore reset log error
       }
+      if (isFirebaseConfigured()) {
+        void firebaseAuthClient.sendPasswordResetEmail(normalizedEmail);
+      }
     }
 
-    // Always return privacy-safe confirmation
     return {
       success: true,
       message: FORGOT_PASSWORD_SUCCESS_MESSAGE,
@@ -437,11 +837,12 @@ export const authService = {
   },
 
   logout(): void {
+    firebaseAuthClient.setStoredAuth(null);
     this.setCurrentSession(null);
   },
 
   // ==========================================
-  // ADMIN PANEL OPERATIONS
+  // ADMIN PANEL OPERATIONS (USERS & ROLES)
   // ==========================================
   adminGetUsers(): User[] {
     return this.getUsers();
@@ -451,12 +852,12 @@ export const authService = {
     if (!userId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
 
     const currentSession = this.getCurrentSession();
-    if (currentSession && currentSession.id === userId) {
+    if (currentSession && (currentSession.uid === userId || currentSession.id === userId)) {
       return { success: false, error: 'Kendi yönetici hesabınızı silemezsiniz.' };
     }
 
     const users = this.getUsers();
-    const target = users.find((u) => u.id === userId);
+    const target = users.find((u) => u.uid === userId || u.id === userId);
     if (!target) {
       return { success: false, error: 'Kullanıcı bulunamadı.' };
     }
@@ -464,10 +865,17 @@ export const authService = {
       return { success: false, error: 'Ana yönetici hesabı silinemez.' };
     }
 
-    const remaining = users.filter((u) => u.id !== userId);
+    const remaining = users.filter((u) => u.uid !== userId && u.id !== userId);
     safeSetItem(USERS_STORAGE_KEY, JSON.stringify(remaining));
 
     this.clearUserHistory(userId);
+    this.clearUserFavorites(userId);
+
+    if (isFirebaseConfigured()) {
+      const fbAuth = firebaseAuthClient.getStoredAuth();
+      const targetDocId = target.firebaseUid || target.uid;
+      void cloudFirestoreClient.deleteDoc('users', targetDocId, fbAuth?.idToken || currentSession?.token);
+    }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('auth_users_updated'));
@@ -476,16 +884,21 @@ export const authService = {
     return { success: true };
   },
 
-  adminToggleBanUser(userId: string): { success: boolean; newStatus?: UserStatus; error?: string } {
+  adminToggleBanUser(userId: string): {
+    success: boolean;
+    newStatus?: UserStatus;
+    isActive?: boolean;
+    error?: string;
+  } {
     if (!userId) return { success: false, error: 'Kullanıcı kimliği eksik.' };
 
     const currentSession = this.getCurrentSession();
-    if (currentSession && currentSession.id === userId) {
+    if (currentSession && (currentSession.uid === userId || currentSession.id === userId)) {
       return { success: false, error: 'Kendi yönetici hesabınızı askıya alamazsınız.' };
     }
 
     const users = this.getUsers();
-    const user = users.find((u) => u.id === userId);
+    const user = users.find((u) => u.uid === userId || u.id === userId);
     if (!user) {
       return { success: false, error: 'Kullanıcı bulunamadı.' };
     }
@@ -493,16 +906,37 @@ export const authService = {
       return { success: false, error: 'Ana yönetici hesabı askıya alınamaz.' };
     }
 
-    const newStatus: UserStatus = user.status === 'banned' ? 'active' : 'banned';
+    const currentlyBanned = user.isActive === false || user.status === 'banned';
+    const nextIsActive = currentlyBanned;
+    const newStatus: UserStatus = nextIsActive ? 'active' : 'banned';
+
+    user.isActive = nextIsActive;
     user.status = newStatus;
+    user.updatedAt = Date.now();
 
     safeSetItem(USERS_STORAGE_KEY, JSON.stringify(users));
+
+    if (isFirebaseConfigured()) {
+      const fbAuth = firebaseAuthClient.getStoredAuth();
+      const targetDocId = user.firebaseUid || user.uid;
+      void cloudFirestoreClient.setDoc(
+        'users',
+        targetDocId,
+        {
+          ...user,
+          uid: targetDocId,
+          id: targetDocId,
+          appUid: user.uid,
+        } as unknown as Record<string, unknown>,
+        fbAuth?.idToken || currentSession?.token,
+      );
+    }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('auth_users_updated'));
       window.dispatchEvent(new Event('auth_state_changed'));
     }
-    return { success: true, newStatus };
+    return { success: true, newStatus, isActive: nextIsActive };
   },
 
   adminCreateUser(input: {
@@ -531,18 +965,42 @@ export const authService = {
       return { success: false, error: 'Bu e-posta adresiyle kayıtlı bir kullanıcı zaten mevcut.' };
     }
 
+    const now = Date.now();
+    const uid = `usr_${now}_${Math.random().toString(36).substring(2, 7)}`;
+    const normalizedRole: UserRole = isAdminRole(input.role, normalizedEmail)
+      ? 'yonetici'
+      : 'kullanici';
+
     const newUser: User = {
-      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      uid,
+      id: uid,
+      displayName: input.name.trim(),
       name: input.name.trim(),
       email: normalizedEmail,
       passwordHash: hashPassword(input.password),
-      role: input.role || 'user',
+      role: normalizedRole,
+      isActive: true,
       status: 'active',
-      createdAt: Date.now(),
+      avatarUrl: null,
+      bio: null,
+      consentAccepted: true,
+      publishedCount: 0,
+      createdAt: now,
+      updatedAt: now,
     };
 
     users.push(newUser);
     safeSetItem(USERS_STORAGE_KEY, JSON.stringify(users));
+
+    const currentSession = this.getCurrentSession();
+    if (isFirebaseConfigured()) {
+      void cloudFirestoreClient.setDoc(
+        'users',
+        newUser.uid,
+        newUser as unknown as Record<string, unknown>,
+        currentSession?.token,
+      );
+    }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new Event('auth_users_updated'));
@@ -551,55 +1009,815 @@ export const authService = {
   },
 
   // ==========================================
-  // TRANSLATION HISTORY
+  // TRANSLATIONS & PERSONAL HISTORY (Firestore `translations` koleksiyonu)
+  // Giriş yapan kullanıcının `uid` değerine bağlı olarak saklanır.
   // ==========================================
-  getUserHistory(userId: string): TranslationHistoryItem[] {
-    if (!userId) return [];
+  getAllTranslations(): TranslationHistoryItem[] {
     try {
       const raw = safeGetItem(HISTORY_STORAGE_KEY);
-      if (!raw) return [];
+      if (!raw) {
+        safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(DEFAULT_PUBLISHED_TRANSLATIONS));
+        return DEFAULT_PUBLISHED_TRANSLATIONS;
+      }
       const items: TranslationHistoryItem[] = JSON.parse(raw);
-      return items.filter((item) => item.userId === userId);
+      return items.map((item) => ({
+        ...item,
+        authorId: item.authorId || item.userId,
+        userId: item.userId || item.authorId,
+        authorName: item.isAnonymous ? 'Anonim Çalışan' : (item.authorName || 'Çalışan'),
+        isAnonymous: item.isAnonymous ?? false,
+        corporateText: item.corporateText || item.corporate,
+        corporate: item.corporate || item.corporateText,
+        normalizedText: item.normalizedText || normalizeCorporateForSearch(item.corporateText || item.corporate || ''),
+        translatedText: item.translatedText || item.human,
+        human: item.human || item.translatedText,
+        tone: item.tone || 'bikkin-calisan',
+        status: item.status || 'taslak',
+        likeCount: item.likeCount ?? 0,
+        favoriteCount: item.favoriteCount ?? 0,
+        updatedAt: item.updatedAt || item.createdAt,
+        publishedAt: item.publishedAt ?? (item.status === 'yayinda' ? item.createdAt : null),
+      }));
+    } catch {
+      return DEFAULT_PUBLISHED_TRANSLATIONS;
+    }
+  },
+
+  /**
+   * Keşfet (Topluluk Çevirileri) için sadece `status === 'yayinda'` olan çevirileri döndürür.
+   */
+  getPublishedTranslations(): TranslationHistoryItem[] {
+    return this.getAllTranslations().filter((item) => item.status === 'yayinda');
+  },
+
+  /**
+   * Yönetici Onay Kuyruğu için `status === 'onay_bekliyor'` olan çevirileri
+   * en eskisi en üstte olacak şekilde (`createdAt` artan) döndürür.
+   */
+  getPendingTranslations(): TranslationHistoryItem[] {
+    return this.getAllTranslations()
+      .filter((item) => item.status === 'onay_bekliyor')
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  },
+
+  getUserHistory(uid: string): TranslationHistoryItem[] {
+    if (!uid) return [];
+    return this.getAllTranslations()
+      .filter((item) => item.authorId === uid || item.userId === uid)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  },
+
+  addTranslationHistory(
+    uid: string,
+    corporate: string,
+    human: string,
+    tone: TranslationTone = 'bikkin-calisan',
+    status: TranslationStatus = 'taslak',
+    isAnonymous = false,
+  ): TranslationHistoryItem | null {
+    if (!uid || !corporate.trim() || !human.trim()) return null;
+    try {
+      const items = this.getAllTranslations();
+      const userDoc = this.getUserByUid(uid);
+      const session = this.getCurrentSession();
+      const now = Date.now();
+      const cleanCorp = corporate.trim();
+      const cleanHuman = human.trim();
+      const resolvedAuthorName = isAnonymous
+        ? 'Anonim Çalışan'
+        : userDoc?.displayName ||
+        userDoc?.name ||
+        session?.displayName ||
+        session?.name ||
+        'Plaza Çalışanı';
+
+      const newItem: TranslationHistoryItem = {
+        id: `tr_${now}_${Math.random().toString(36).substring(2, 6)}`,
+        userId: uid,
+        authorId: uid,
+        authorName: resolvedAuthorName,
+        isAnonymous: Boolean(isAnonymous),
+        corporate: cleanCorp,
+        corporateText: cleanCorp,
+        normalizedText: normalizeCorporateForSearch(cleanCorp),
+        human: cleanHuman,
+        translatedText: cleanHuman,
+        tone,
+        status,
+        rejectionReason: null,
+        reviewedBy: null,
+        reviewedAt: null,
+        likeCount: 0,
+        favoriteCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: status === 'yayinda' ? now : null,
+      };
+
+      items.unshift(newItem);
+      const trimmed = items.slice(0, 100);
+      safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(trimmed));
+
+      if (isFirebaseConfigured()) {
+        const fbAuth = firebaseAuthClient.getStoredAuth();
+        const cloudAuthorId = fbAuth?.localId || uid;
+        void cloudFirestoreClient.setDoc(
+          'translations',
+          newItem.id,
+          {
+            ...newItem,
+            authorId: cloudAuthorId,
+            userId: cloudAuthorId,
+            appUserId: uid,
+          } as unknown as Record<string, unknown>,
+          fbAuth?.idToken || session?.token,
+        );
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('history_updated'));
+      }
+      return newItem;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Mevcut çeviri dokümanını (`translations/{translationId}`) günceller.
+   * Önemli Kural: Durumu zaten `yayinda` veya `reddedildi` olan bir çeviri düzenlenip
+   * kaydedildiğinde durumu otomatik olarak tekrar `onay_bekliyor` olur ve `updatedAt` güncellenir.
+   */
+  updateTranslation(
+    uid: string,
+    translationId: string,
+    payload: {
+      corporateText: string;
+      translatedText: string;
+      tone: TranslationTone;
+      isAnonymous: boolean;
+      requestedStatus: 'taslak' | 'onay_bekliyor';
+    },
+  ): { success: boolean; item?: TranslationHistoryItem; error?: string } {
+    if (!uid || !translationId) {
+      return { success: false, error: 'Geçersiz kullanıcı veya çeviri kimliği.' };
+    }
+
+    const items = this.getAllTranslations();
+    const index = items.findIndex(
+      (t) => t.id === translationId && (t.authorId === uid || t.userId === uid),
+    );
+    if (index === -1) {
+      return { success: false, error: 'Düzenlenecek çeviri kaydı bulunamadı.' };
+    }
+
+    const current = items[index];
+    const cleanCorp = payload.corporateText.trim();
+    const cleanTranslated = payload.translatedText.trim();
+    const now = Date.now();
+
+    const userDoc = this.getUserByUid(uid);
+    const session = this.getCurrentSession();
+    const resolvedAuthorName = payload.isAnonymous
+      ? 'Anonim Çalışan'
+      : userDoc?.displayName ||
+      userDoc?.name ||
+      session?.displayName ||
+      session?.name ||
+      'Plaza Çalışanı';
+
+    // Önemli Kural: Durumu zaten 'yayinda' veya 'reddedildi' olan bir çeviri düzenlenip kaydedildiğinde
+    // durumu otomatik olarak tekrar 'onay_bekliyor' olur.
+    const nextStatus: TranslationStatus =
+      current.status === 'yayinda' || current.status === 'reddedildi'
+        ? 'onay_bekliyor'
+        : payload.requestedStatus;
+
+    const updated: TranslationHistoryItem = {
+      ...current,
+      authorName: resolvedAuthorName,
+      isAnonymous: Boolean(payload.isAnonymous),
+      corporate: cleanCorp,
+      corporateText: cleanCorp,
+      normalizedText: normalizeCorporateForSearch(cleanCorp),
+      human: cleanTranslated,
+      translatedText: cleanTranslated,
+      tone: payload.tone,
+      status: nextStatus,
+      rejectionReason: null,
+      updatedAt: now,
+    };
+
+    items[index] = updated;
+    safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(items));
+
+    if (isFirebaseConfigured()) {
+      const fbAuth = firebaseAuthClient.getStoredAuth();
+      const cloudAuthorId = fbAuth?.localId || uid;
+      void cloudFirestoreClient.setDoc(
+        'translations',
+        updated.id,
+        {
+          ...updated,
+          authorId: cloudAuthorId,
+          userId: cloudAuthorId,
+          appUserId: uid,
+        } as unknown as Record<string, unknown>,
+        fbAuth?.idToken || session?.token,
+      );
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('history_updated'));
+    }
+
+    return { success: true, item: updated };
+  },
+
+  /**
+   * Belirli bir çeviri dokümanını (`translations/{translationId}`) veritabanından tamamen siler.
+   */
+  deleteTranslation(
+    uid: string,
+    translationId: string,
+  ): { success: boolean; error?: string } {
+    if (!uid || !translationId) {
+      return { success: false, error: 'Geçersiz kullanıcı veya çeviri kimliği.' };
+    }
+
+    const items = this.getAllTranslations();
+    const target = items.find(
+      (t) => t.id === translationId && (t.authorId === uid || t.userId === uid),
+    );
+    if (!target) {
+      return { success: false, error: 'Silinecek çeviri kaydı bulunamadı.' };
+    }
+
+    const remaining = items.filter((t) => t.id !== translationId);
+    safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(remaining));
+
+    // İlişkili favori kaydını da temizle
+    const allFavorites = this.getAllFavorites();
+    const remainingFavorites = allFavorites.filter((f) => f.translationId !== translationId);
+    if (remainingFavorites.length !== allFavorites.length) {
+      safeSetItem(FAVORITES_STORAGE_KEY, JSON.stringify(remainingFavorites));
+    }
+
+    const session = this.getCurrentSession();
+    if (isFirebaseConfigured()) {
+      void cloudFirestoreClient.deleteDoc('translations', translationId, session?.token);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('history_updated'));
+      window.dispatchEvent(new Event('favorites_updated'));
+    }
+
+    return { success: true };
+  },
+
+  updateTranslationStatus(
+    translationId: string,
+    newStatus: TranslationStatus,
+    actorUid: string,
+    rejectionReason?: string | null,
+  ): { success: boolean; item?: TranslationHistoryItem; error?: string } {
+    if (!translationId) return { success: false, error: 'Çeviri kimliği eksik.' };
+    const items = this.getAllTranslations();
+    const index = items.findIndex((t) => t.id === translationId);
+    if (index === -1) {
+      return { success: false, error: 'Çeviri kaydı bulunamadı.' };
+    }
+
+    const current = items[index];
+    const previousStatus = current.status;
+    const now = Date.now();
+
+    if (newStatus === 'reddedildi' && (!rejectionReason || !rejectionReason.trim())) {
+      return { success: false, error: 'Lütfen ret gerekçesi yazın.' };
+    }
+
+    const updated: TranslationHistoryItem = {
+      ...current,
+      status: newStatus,
+      rejectionReason: newStatus === 'reddedildi' ? (rejectionReason?.trim() || null) : null,
+      reviewedBy:
+        newStatus === 'yayinda' || newStatus === 'reddedildi' ? actorUid : current.reviewedBy,
+      reviewedAt:
+        newStatus === 'yayinda' || newStatus === 'reddedildi' ? now : current.reviewedAt,
+      publishedAt: newStatus === 'yayinda' ? now : current.publishedAt,
+      updatedAt: now,
+    };
+
+    items[index] = updated;
+    safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(items));
+
+    const session = this.getCurrentSession();
+    if (isFirebaseConfigured()) {
+      const fbAuth = firebaseAuthClient.getStoredAuth();
+      const payloadForCloud: Record<string, unknown> = {
+        ...updated,
+      };
+      if (newStatus === 'onay_bekliyor' && fbAuth?.localId) {
+        payloadForCloud.authorId = fbAuth.localId;
+        payloadForCloud.userId = fbAuth.localId;
+        payloadForCloud.appUserId = current.authorId;
+      }
+      void cloudFirestoreClient.setDoc(
+        'translations',
+        updated.id,
+        payloadForCloud,
+        fbAuth?.idToken || session?.token,
+      );
+    }
+
+    // Yönetici kararıysa `moderation_logs` koleksiyonuna denetim kaydı ekle
+    if (newStatus === 'yayinda' || newStatus === 'reddedildi') {
+      this.addModerationLog({
+        translationId: updated.id,
+        adminId: actorUid,
+        previousStatus,
+        newStatus,
+        reason: updated.rejectionReason,
+      });
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('history_updated'));
+    }
+    return { success: true, item: updated };
+  },
+
+  clearUserHistory(uid: string): void {
+    if (!uid) return;
+    try {
+      const items = this.getAllTranslations();
+      const toDelete = items.filter((item) => item.userId === uid || item.authorId === uid);
+      const remaining = items.filter((item) => item.userId !== uid && item.authorId !== uid);
+      safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(remaining));
+
+      const session = this.getCurrentSession();
+      if (isFirebaseConfigured()) {
+        for (const doc of toDelete) {
+          void cloudFirestoreClient.deleteDoc('translations', doc.id, session?.token);
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('history_updated'));
+      }
+    } catch {
+      // ignore
+    }
+  },
+
+  // ==========================================
+  // FAVORITES (Firestore `favorites` koleksiyonu)
+  // Giriş yapan kullanıcının `uid` değerine bağlı olarak saklanır.
+  // Doküman ID: `${uid}_${translationId}`
+  // ==========================================
+  getAllFavorites(): FavoriteItem[] {
+    try {
+      const raw = safeGetItem(FAVORITES_STORAGE_KEY);
+      if (!raw) return [];
+      return JSON.parse(raw) as FavoriteItem[];
     } catch {
       return [];
     }
   },
 
-  addTranslationHistory(userId: string, corporate: string, human: string): void {
-    if (!userId || !corporate.trim() || !human.trim()) return;
-    try {
-      const raw = safeGetItem(HISTORY_STORAGE_KEY);
-      const items: TranslationHistoryItem[] = raw ? JSON.parse(raw) : [];
-      items.unshift({
-        id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        userId,
-        corporate: corporate.trim(),
-        human: human.trim(),
-        createdAt: Date.now(),
-      });
-      // Keep last 50 entries
-      safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(items.slice(0, 50)));
+  getUserFavorites(uid: string): FavoriteItem[] {
+    if (!uid) return [];
+    return this.getAllFavorites().filter((fav) => fav.userId === uid);
+  },
+
+  isFavorited(uid: string, translationId: string): boolean {
+    if (!uid || !translationId) return false;
+    const compositeId = `${uid}_${translationId}`;
+    return this.getAllFavorites().some(
+      (fav) => fav.id === compositeId || (fav.userId === uid && fav.translationId === translationId),
+    );
+  },
+
+  toggleFavorite(
+    uid: string,
+    payload: {
+      translationId: string;
+      corporateText: string;
+      translatedText: string;
+      tone?: TranslationTone;
+      note?: string | null;
+    },
+  ): { favorited: boolean; item?: FavoriteItem } {
+    if (!uid || !payload.translationId) return { favorited: false };
+    const compositeId = `${uid}_${payload.translationId}`;
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const cloudUserId = fbAuth?.localId || uid;
+    const cloudCompositeId = `${cloudUserId}_${payload.translationId}`;
+    const all = this.getAllFavorites();
+    const existingIndex = all.findIndex((f) => f.id === compositeId);
+    const session = this.getCurrentSession();
+
+    const translations = this.getAllTranslations();
+    const trIndex = translations.findIndex((t) => t.id === payload.translationId);
+
+    if (existingIndex >= 0) {
+      all.splice(existingIndex, 1);
+      safeSetItem(FAVORITES_STORAGE_KEY, JSON.stringify(all));
+
+      if (trIndex >= 0) {
+        translations[trIndex].favoriteCount = Math.max(0, (translations[trIndex].favoriteCount || 1) - 1);
+        safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(translations));
+      }
+
+      if (isFirebaseConfigured()) {
+        void cloudFirestoreClient.deleteDoc(
+          'favorites',
+          cloudCompositeId,
+          fbAuth?.idToken || session?.token,
+        );
+      }
+
       if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('favorites_updated'));
         window.dispatchEvent(new Event('history_updated'));
       }
-    } catch {
-      // ignore
+      return { favorited: false };
+    }
+
+    const newFav: FavoriteItem = {
+      id: compositeId,
+      userId: uid,
+      translationId: payload.translationId,
+      corporateText: payload.corporateText.trim(),
+      translatedText: payload.translatedText.trim(),
+      tone: payload.tone || 'bikkin-calisan',
+      note: payload.note ?? null,
+      createdAt: Date.now(),
+    };
+
+    all.unshift(newFav);
+    safeSetItem(FAVORITES_STORAGE_KEY, JSON.stringify(all));
+
+    if (trIndex >= 0) {
+      translations[trIndex].favoriteCount = (translations[trIndex].favoriteCount || 0) + 1;
+      safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(translations));
+    }
+
+    if (isFirebaseConfigured()) {
+      void cloudFirestoreClient.setDoc(
+        'favorites',
+        cloudCompositeId,
+        {
+          ...newFav,
+          id: cloudCompositeId,
+          userId: cloudUserId,
+          appUserId: uid,
+        } as unknown as Record<string, unknown>,
+        fbAuth?.idToken || session?.token,
+      );
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('favorites_updated'));
+      window.dispatchEvent(new Event('history_updated'));
+    }
+    return { favorited: true, item: newFav };
+  },
+
+  clearUserFavorites(uid: string): void {
+    if (!uid) return;
+    const all = this.getAllFavorites();
+    const remaining = all.filter((f) => f.userId !== uid);
+    safeSetItem(FAVORITES_STORAGE_KEY, JSON.stringify(remaining));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('favorites_updated'));
     }
   },
 
-  clearUserHistory(userId: string): void {
-    if (!userId) return;
+  // ==========================================
+  // LIKES (Firestore `likes` koleksiyonu)
+  // Doküman ID: `${uid}_${translationId}`
+  // ==========================================
+  getAllLikes(): LikeItem[] {
     try {
-      const raw = safeGetItem(HISTORY_STORAGE_KEY);
-      if (!raw) return;
-      const items: TranslationHistoryItem[] = JSON.parse(raw);
-      const remaining = items.filter((item) => item.userId !== userId);
-      safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(remaining));
+      const raw = safeGetItem(LIKES_STORAGE_KEY);
+      if (!raw) return [];
+      return JSON.parse(raw) as LikeItem[];
+    } catch {
+      return [];
+    }
+  },
+
+  getUserLikes(uid: string): LikeItem[] {
+    if (!uid) return [];
+    return this.getAllLikes().filter((l) => l.userId === uid);
+  },
+
+  isLiked(uid: string, translationId: string): boolean {
+    if (!uid || !translationId) return false;
+    const compositeId = `${uid}_${translationId}`;
+    return this.getAllLikes().some(
+      (l) => l.id === compositeId || (l.userId === uid && l.translationId === translationId),
+    );
+  },
+
+  toggleLike(uid: string, translationId: string): { liked: boolean; likeCount: number } {
+    if (!uid || !translationId) return { liked: false, likeCount: 0 };
+    const compositeId = `${uid}_${translationId}`;
+    const fbAuth = firebaseAuthClient.getStoredAuth();
+    const cloudUserId = fbAuth?.localId || uid;
+    const cloudCompositeId = `${cloudUserId}_${translationId}`;
+    const allLikes = this.getAllLikes();
+    const existingIndex = allLikes.findIndex((l) => l.id === compositeId);
+    const session = this.getCurrentSession();
+
+    const translations = this.getAllTranslations();
+    const trIndex = translations.findIndex((t) => t.id === translationId);
+    let likeCount = trIndex >= 0 ? translations[trIndex].likeCount || 0 : 0;
+
+    if (existingIndex >= 0) {
+      allLikes.splice(existingIndex, 1);
+      safeSetItem(LIKES_STORAGE_KEY, JSON.stringify(allLikes));
+      likeCount = Math.max(0, likeCount - 1);
+      if (trIndex >= 0) {
+        translations[trIndex].likeCount = likeCount;
+        safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(translations));
+      }
+      if (isFirebaseConfigured()) {
+        void cloudFirestoreClient.deleteDoc(
+          'likes',
+          cloudCompositeId,
+          fbAuth?.idToken || session?.token,
+        );
+      }
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('history_updated'));
       }
+      return { liked: false, likeCount };
+    }
+
+    const newLike: LikeItem = {
+      id: compositeId,
+      userId: uid,
+      translationId,
+      createdAt: Date.now(),
+    };
+    allLikes.push(newLike);
+    safeSetItem(LIKES_STORAGE_KEY, JSON.stringify(allLikes));
+    likeCount += 1;
+
+    if (trIndex >= 0) {
+      translations[trIndex].likeCount = likeCount;
+      safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(translations));
+    }
+
+    if (isFirebaseConfigured()) {
+      void cloudFirestoreClient.setDoc(
+        'likes',
+        cloudCompositeId,
+        {
+          ...newLike,
+          id: cloudCompositeId,
+          userId: cloudUserId,
+          appUserId: uid,
+        } as unknown as Record<string, unknown>,
+        fbAuth?.idToken || session?.token,
+      );
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('history_updated'));
+    }
+    return { liked: true, likeCount };
+  },
+
+  // ==========================================
+  // MODERATION LOGS (Firestore `moderation_logs` koleksiyonu)
+  // ==========================================
+  addModerationLog(input: {
+    translationId: string;
+    adminId: string;
+    previousStatus: TranslationStatus;
+    newStatus: TranslationStatus;
+    reason?: string | null;
+  }): ModerationLogItem {
+    const raw = safeGetItem(MODERATION_LOGS_STORAGE_KEY);
+    const logs: ModerationLogItem[] = raw ? JSON.parse(raw) : [];
+    const newLog: ModerationLogItem = {
+      id: `mod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      translationId: input.translationId,
+      adminId: input.adminId,
+      previousStatus: input.previousStatus,
+      newStatus: input.newStatus,
+      reason: input.reason ?? null,
+      createdAt: Date.now(),
+    };
+    logs.unshift(newLog);
+    safeSetItem(MODERATION_LOGS_STORAGE_KEY, JSON.stringify(logs));
+
+    const session = this.getCurrentSession();
+    if (isFirebaseConfigured()) {
+      void cloudFirestoreClient.setDoc(
+        'moderation_logs',
+        newLog.id,
+        newLog as unknown as Record<string, unknown>,
+        session?.token,
+      );
+    }
+    return newLog;
+  },
+
+  /**
+   * Canlı Cloud Firestore koleksiyonlarından (`translations`, `likes`, `favorites`, `users`)
+   * güncel verileri çekip yerel önbellekle senkronize eder.
+   */
+  async syncFromCloud(): Promise<void> {
+    if (!isFirebaseConfigured()) return;
+    try {
+      const session = this.getCurrentSession();
+      const fbAuth = firebaseAuthClient.getStoredAuth();
+      const token = fbAuth?.idToken || session?.token;
+
+      // 1. Yayındaki tüm çevirileri çek (herkese açık: status == 'yayinda')
+      const cloudPublished = await cloudFirestoreClient.queryByField<
+        TranslationHistoryItem & { appUserId?: string }
+      >('translations', 'status', 'yayinda', token);
+
+      // 2. Oturum açmış kullanıcının kendi çevirilerini veya yöneticiyse tüm çevirileri çek
+      let cloudOwnOrAdmin: Array<TranslationHistoryItem & { appUserId?: string }> = [];
+      if (session?.role === 'yonetici' && token) {
+        const allCloud = await cloudFirestoreClient.listDocs<
+          TranslationHistoryItem & { appUserId?: string }
+        >('translations', token);
+        if (allCloud) cloudOwnOrAdmin = allCloud;
+      } else if (fbAuth?.localId && token) {
+        const ownCloud = await cloudFirestoreClient.queryByField<
+          TranslationHistoryItem & { appUserId?: string }
+        >('translations', 'authorId', fbAuth.localId, token);
+        if (ownCloud) cloudOwnOrAdmin = ownCloud;
+      }
+
+      if (cloudPublished || cloudOwnOrAdmin.length > 0) {
+        const localItems = this.getAllTranslations();
+        const mergedMap = new Map<string, TranslationHistoryItem>();
+        for (const item of localItems) {
+          mergedMap.set(item.id, item);
+        }
+        const incoming = [...(cloudPublished || []), ...cloudOwnOrAdmin];
+        for (const doc of incoming) {
+          if (!doc || !doc.id) continue;
+          const mappedOwner =
+            doc.appUserId ||
+            (fbAuth?.localId && doc.authorId === fbAuth.localId && session?.uid
+              ? session.uid
+              : doc.authorId || doc.userId);
+          const existing = mergedMap.get(doc.id);
+          if (!existing || (doc.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            mergedMap.set(doc.id, {
+              ...existing,
+              ...doc,
+              authorId: mappedOwner,
+              userId: mappedOwner,
+            });
+          }
+        }
+        safeSetItem(HISTORY_STORAGE_KEY, JSON.stringify(Array.from(mergedMap.values())));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('history_updated'));
+        }
+      }
+
+      // 3. Beğenileri çek (herkese açık: allow read: if true)
+      const cloudLikes = await cloudFirestoreClient.listDocs<LikeItem & { appUserId?: string }>(
+        'likes',
+        token,
+      );
+      if (cloudLikes && cloudLikes.length > 0) {
+        const localLikes = this.getAllLikes();
+        const likeMap = new Map<string, LikeItem>();
+        for (const l of localLikes) likeMap.set(l.id, l);
+        for (const cl of cloudLikes) {
+          if (!cl || !cl.translationId) continue;
+          const uidForApp =
+            cl.appUserId ||
+            (fbAuth?.localId && cl.userId === fbAuth.localId && session?.uid
+              ? session.uid
+              : cl.userId);
+          const idForApp = `${uidForApp}_${cl.translationId}`;
+          likeMap.set(idForApp, {
+            id: idForApp,
+            userId: uidForApp,
+            translationId: cl.translationId,
+            createdAt: cl.createdAt || Date.now(),
+          });
+        }
+        safeSetItem(LIKES_STORAGE_KEY, JSON.stringify(Array.from(likeMap.values())));
+      }
+
+      // 4. Giriş yapmış kullanıcının favorilerini çek
+      if (fbAuth?.localId && token && session?.uid) {
+        const cloudFavs = await cloudFirestoreClient.queryByField<
+          FavoriteItem & { appUserId?: string }
+        >('favorites', 'userId', fbAuth.localId, token);
+        if (cloudFavs && cloudFavs.length > 0) {
+          const localFavs = this.getAllFavorites();
+          const favMap = new Map<string, FavoriteItem>();
+          for (const f of localFavs) favMap.set(f.id, f);
+          for (const cf of cloudFavs) {
+            if (!cf || !cf.translationId) continue;
+            const idForApp = `${session.uid}_${cf.translationId}`;
+            favMap.set(idForApp, {
+              ...cf,
+              id: idForApp,
+              userId: session.uid,
+            });
+          }
+          safeSetItem(FAVORITES_STORAGE_KEY, JSON.stringify(Array.from(favMap.values())));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('favorites_updated'));
+          }
+        }
+      }
+
+      // 5. Giriş yapmış kullanıcının kendi Firestore profilinden rol/durum bilgisini doğrula
+      if (fbAuth?.localId && token && session) {
+        const ownProfile = await cloudFirestoreClient.getDoc<User & { appUid?: string }>(
+          'users',
+          fbAuth.localId,
+          token,
+        );
+        if (ownProfile) {
+          const cloudRole: UserRole = isAdminRole(ownProfile.role, session.email)
+            ? 'yonetici'
+            : 'kullanici';
+          const cloudIsActive =
+            ownProfile.isActive !== false && ownProfile.status !== 'banned';
+
+          const localUsers = this.getUsers();
+          const idx = localUsers.findIndex(
+            (u) => u.email.toLowerCase() === session.email.toLowerCase(),
+          );
+          if (idx >= 0) {
+            localUsers[idx] = {
+              ...localUsers[idx],
+              firebaseUid: fbAuth.localId,
+              role: cloudRole,
+              isActive: cloudIsActive,
+              status: cloudIsActive ? 'active' : 'banned',
+            };
+            safeSetItem(USERS_STORAGE_KEY, JSON.stringify(localUsers));
+          }
+
+          if (!cloudIsActive) {
+            this.logout();
+            return;
+          }
+
+          if (session.role !== cloudRole || session.isActive !== cloudIsActive) {
+            this.setCurrentSession({
+              ...session,
+              role: cloudRole,
+              isActive: cloudIsActive,
+            });
+          }
+        }
+      }
+
+      // 6. Yönetici ise tüm kullanıcıları çek
+      const latestSession = this.getCurrentSession();
+      if (latestSession?.role === 'yonetici' && token) {
+        const cloudUsers = await cloudFirestoreClient.listDocs<User & { appUid?: string }>(
+          'users',
+          token,
+        );
+        if (cloudUsers && cloudUsers.length > 0) {
+          const localUsers = this.getUsers();
+          const byEmail = new Map<string, User>();
+          for (const u of localUsers) byEmail.set(u.email.toLowerCase(), u);
+          for (const cu of cloudUsers) {
+            if (!cu || !cu.email) continue;
+            const key = cu.email.toLowerCase();
+            const existing = byEmail.get(key);
+            byEmail.set(
+              key,
+              normalizeUserDoc({
+                ...existing,
+                ...cu,
+                firebaseUid: cu.uid || existing?.firebaseUid,
+                uid: existing?.uid || cu.appUid || cu.uid,
+                id: existing?.id || cu.appUid || cu.id,
+              }),
+            );
+          }
+          safeSetItem(USERS_STORAGE_KEY, JSON.stringify(Array.from(byEmail.values())));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('auth_users_updated'));
+          }
+        }
+      }
     } catch {
-      // ignore
+      // Ağ hatasında yerel önbellek korunur
     }
   },
 };

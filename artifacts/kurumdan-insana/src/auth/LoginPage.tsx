@@ -15,36 +15,42 @@ export function LoginPage() {
   const searchParams = new URLSearchParams(window.location.search);
   const redirectTarget = searchParams.get('redirect') || '/';
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError('');
     setIsSubmitting(true);
+    console.info('[LoginPage] Giriş formu gönderildi:', email.trim().toLowerCase());
 
-    const result = login({
-      email,
-      password,
-    });
+    try {
+      const result = await login({
+        email,
+        password,
+      });
 
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      if (result.fieldErrors) {
-        setFieldErrors(result.fieldErrors);
+      if (!result.success) {
+        if (result.fieldErrors) {
+          setFieldErrors(result.fieldErrors);
+        }
+        if (result.error) {
+          setFormError(result.error);
+        }
+        return;
       }
-      if (result.error) {
-        setFormError(result.error);
+
+      // If the user logs in as Admin, redirect specifically to Admin Panel
+      if (result.user?.role === 'admin' || email.trim().toLowerCase() === 'admin@gmail.com') {
+        setLocation('/admin');
+        return;
       }
-      return;
-    }
 
-    // If the user logs in as Admin, redirect specifically to Admin Panel
-    if (result.user?.role === 'admin' || email.trim().toLowerCase() === 'admin@gmail.com') {
-      setLocation('/admin');
-      return;
+      // Redirect to main app screen (or redirect target)
+      setLocation(redirectTarget);
+    } catch (err) {
+      console.error('[LoginPage] Giriş sırasında beklenmeyen hata:', err);
+      setFormError('Giriş sırasında beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Redirect to main app screen (or redirect target)
-    setLocation(redirectTarget);
   };
 
   return (

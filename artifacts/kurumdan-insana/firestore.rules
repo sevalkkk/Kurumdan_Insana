@@ -1,0 +1,141 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // YARDIMCI FONKSİYONLAR (HELPER FUNCTIONS)
+    // =========================================================================
+
+    // Kullanıcının oturum açmış (giriş yapmış) olup olmadığını kontrol eder
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // İstek yapan kullanıcının belirtilen userId ile aynı kişi olup olmadığını kontrol eder
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Giriş yapmış kullanıcının `users` koleksiyonundaki profil dokümanını getirir
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Kullanıcının yönetici (role == 'yonetici') olup olmadığını kontrol eder
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'admin@gmail.com' ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          getUserData().role == 'yonetici'
+        )
+      );
+    }
+
+    // =========================================================================
+    // 1. USERS (KULLANICILAR) KOLEKSİYONU KURALLARI
+    // =========================================================================
+    match /users/{userId} {
+
+      // OKUMA: Herkes sadece kendi profil dokümanını okuyabilir; yöneticiler (role == 'yonetici') tüm kullanıcıları okuyabilir
+      allow read: if isOwner(userId) || isAdmin();
+
+      // OLUŞTURMA: Kullanıcı ilk kayıtta kendi dokümanını sadece role == 'kullanici' olarak oluşturabilir (yönetici de kullanıcı ekleyebilir)
+      allow create: if (isOwner(userId) && request.resource.data.role == 'kullanici') || isAdmin();
+
+      // GÜNCELLEME: Kimse kendi `role` alanını değiştiremez (request.resource.data.role == resource.data.role);
+      // rol alanını ve diğer kullanıcıları sadece yönetici (role == 'yonetici') değiştirebilir
+      allow update: if (
+        isOwner(userId)
+        && request.resource.data.role == resource.data.role
+      ) || (
+        isAdmin()
+        && (!isOwner(userId) || request.resource.data.role == resource.data.role)
+      );
+
+      // SİLME: Sadece hesap sahibi veya yönetici silebilir
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // =========================================================================
+    // 2. TRANSLATIONS (ÇEVİRİLER VE ONAY KUYRUĞU) KOLEKSİYONU KURALLARI
+    // =========================================================================
+    match /translations/{translationId} {
+
+      // OKUMA: Durumu 'yayinda' olan çevirileri herkes (giriş yapmamışlar dahil) okuyabilir;
+      // diğer durumları ('taslak', 'onay_bekliyor', 'reddedildi') sadece çevirinin sahibi (authorId == request.auth.uid) ve yöneticiler okuyabilir
+      allow read: if resource.data.status == 'yayinda'
+        || isOwner(resource.data.authorId)
+        || isAdmin();
+
+      // OLUŞTURMA: Giriş yapmış kullanıcılar sadece kendi authorId değerleriyle (authorId == request.auth.uid)
+      // ve yalnızca 'taslak' veya 'onay_bekliyor' durumunda kayıt oluşturabilir
+      allow create: if isAuthenticated()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.status in ['taslak', 'onay_bekliyor'];
+
+      // GÜNCELLEME:
+      // - Çevirinin sahibi kendi çevirisini düzenleyebilir ancak durumu doğrudan 'yayinda' veya 'reddedildi' yapamaz (yalnızca 'taslak' veya 'onay_bekliyor' yapabilir).
+      // - Durumu (status) 'yayinda' veya 'reddedildi' yapmak sadece yöneticiye (role == 'yonetici') açıktır; yönetici her çeviriyi düzenleyebilir.
+      allow update: if (
+        isOwner(resource.data.authorId)
+        && request.resource.data.authorId == resource.data.authorId
+        && request.resource.data.status in ['taslak', 'onay_bekliyor']
+      ) || isAdmin();
+
+      // SİLME: Çeviriyi sadece sahibi (authorId == request.auth.uid) veya yönetici (role == 'yonetici') silebilir
+      allow delete: if isOwner(resource.data.authorId) || isAdmin();
+    }
+
+    // =========================================================================
+    // 3. LIKES (BEĞENİLER) KOLEKSİYONU KURALLARI
+    // =========================================================================
+    match /likes/{likeId} {
+
+      // OKUMA: Beğenileri herkes (giriş yapmamış ziyaretçiler dahil) okuyabilir
+      allow read: if true;
+
+      // OLUŞTURMA: Sadece giriş yapmış kullanıcı kendi adına (userId == request.auth.uid) beğeni ekleyebilir
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid;
+
+      // SİLME: Sadece giriş yapmış kullanıcı kendi beğenisini (userId == request.auth.uid) geri alabilir (silebilir)
+      allow delete: if isAuthenticated()
+        && resource.data.userId == request.auth.uid;
+
+      // GÜNCELLEME: Beğeni dokümanları güncellenemez (yalnızca eklenir veya silinir)
+      allow update: if false;
+    }
+
+    // =========================================================================
+    // 4. FAVORITES (FAVORİLER) KOLEKSİYONU KURALLARI
+    // =========================================================================
+    match /favorites/{favoriteId} {
+
+      // OKUMA: Favorileri sadece sahibi (userId == request.auth.uid) okuyabilir
+      allow read: if isAuthenticated()
+        && resource.data.userId == request.auth.uid;
+
+      // OLUŞTURMA: Favoriyi sadece giriş yapmış kullanıcı kendi adına (userId == request.auth.uid) ekleyebilir
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid;
+
+      // GÜNCELLEME VE SİLME: Favorileri sadece sahibi (userId == request.auth.uid) güncelleyebilir ve silebilir
+      allow update, delete: if isAuthenticated()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // 5. MODERATION_LOGS (MODERASYON DENETİM İZİ) KOLEKSİYONU KURALLARI
+    // =========================================================================
+    match /moderation_logs/{logId} {
+
+      // OKUMA VE OLUŞTURMA: Yalnızca yöneticilere (role == 'yonetici') açıktır
+      allow read, create: if isAdmin();
+
+      // GÜNCELLEME VE SİLME: Denetim kayıtları değiştirilemez ve silinemez
+      allow update, delete: if false;
+    }
+  }
+}

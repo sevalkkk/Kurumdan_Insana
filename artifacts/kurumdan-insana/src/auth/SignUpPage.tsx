@@ -15,32 +15,38 @@ export function SignUpPage() {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError('');
     setIsSubmitting(true);
+    console.info('[SignUpPage] Kayıt formu gönderildi:', email.trim().toLowerCase());
 
-    const result = signUp({
-      name,
-      email,
-      password,
-      consent,
-    });
+    try {
+      const result = await signUp({
+        name,
+        email,
+        password,
+        consent,
+      });
 
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      if (result.fieldErrors) {
-        setFieldErrors(result.fieldErrors);
+      if (!result.success) {
+        if (result.fieldErrors) {
+          setFieldErrors(result.fieldErrors);
+        }
+        if (result.error) {
+          setFormError(result.error);
+        }
+        return;
       }
-      if (result.error) {
-        setFormError(result.error);
-      }
-      return;
+
+      // Redirect directly to the Translator/Dashboard screen
+      setLocation('/');
+    } catch (err) {
+      console.error('[SignUpPage] Kayıt sırasında beklenmeyen hata:', err);
+      setFormError('Kayıt sırasında beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Redirect directly to the Translator/Dashboard screen
-    setLocation('/');
   };
 
   return (

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Redirect, useLocation } from 'wouter';
 import { useAuth } from './AuthContext';
+import { isAdminRole } from './types';
 
 interface AdminRouteProps {
   component: React.ComponentType<any>;
@@ -18,7 +19,7 @@ export function AdminRoute({ component: Component, ...rest }: AdminRouteProps) {
   }
 
   // If authenticated but not admin, deny access and return to home view
-  if (user?.role !== 'admin' && user?.email !== 'admin@gmail.com') {
+  if (!isAdminRole(user?.role, user?.email)) {
     return <Redirect to="/" />;
   }
 
