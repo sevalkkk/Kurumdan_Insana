@@ -54,46 +54,58 @@ module.exports = async function handler(req, res) {
       `Kurumsal cümle: ${rawText}`,
     ].join('\n');
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey.trim())}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 256,
-          },
-        }),
-      },
-    );
+    const models = ['gemini-3.8-flash', 'gemini-3.8-flash-lite', 'gemini-2.5-flash-lite'];
+    let lastErrorDetail = 'Bilinmeyen hata';
+    let translatedText = '';
+    let usedModel = models[0];
 
-    const json = await geminiRes.json().catch(() => ({}));
+    for (const model of models) {
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 256,
+            },
+          }),
+        },
+      );
 
-    if (!geminiRes.ok) {
-      const detail = (json && json.error && json.error.message) || `HTTP ${geminiRes.status}`;
-      console.error('[api/translate] Gemini API hatası:', geminiRes.status, detail);
-      return res.status(502).json({
-        error: `Yapay zekâ servisinden yanıt alınamadı (${detail}). Lütfen biraz sonra tekrar deneyin.`,
-      });
+      const json = await geminiRes.json().catch(() => ({}));
+
+      if (!geminiRes.ok) {
+        lastErrorDetail = (json && json.error && json.error.message) || `HTTP ${geminiRes.status}`;
+        console.warn(`[api/translate] ${model} başarısız (${geminiRes.status}):`, lastErrorDetail);
+        continue;
+      }
+
+      const parts = json?.candidates?.[0]?.content?.parts || [];
+      const candidateText = parts
+        .map((p) => p?.text || '')
+        .join('')
+        .trim();
+
+      if (candidateText) {
+        translatedText = candidateText;
+        usedModel = model;
+        break;
+      }
+      lastErrorDetail = 'Yapay zekâ boş yanıt döndürdü.';
     }
-
-    const parts = json?.candidates?.[0]?.content?.parts || [];
-    const translatedText = parts
-      .map((p) => p?.text || '')
-      .join('')
-      .trim();
 
     if (!translatedText) {
       return res.status(502).json({
-        error: 'Yapay zekâ boş bir yanıt döndürdü. Lütfen cümlenizi düzenleyip tekrar deneyin.',
+        error: `Yapay zekâ servisinden yanıt alınamadı (${lastErrorDetail}). Lütfen biraz sonra tekrar deneyin.`,
       });
     }
 
     return res.status(200).json({
       translatedText,
-      model: 'gemini-3.8-flash',
+      model: usedModel,
     });
   } catch (err) {
     console.error('[api/translate] Sunucu hatası:', err);
