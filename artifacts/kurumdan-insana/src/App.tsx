@@ -376,19 +376,27 @@ function HomePage() {
                     data-testid="loading-translator"
                     style={{
                       marginTop: '14px',
-                      padding: '10px 14px',
+                      padding: '12px 16px',
                       borderRadius: '10px',
                       border: '1px solid rgba(184, 255, 1, 0.35)',
                       background: 'rgba(184, 255, 1, 0.08)',
                       color: '#b8ff01',
                       fontSize: '13px',
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      gap: '8px',
+                      justifyContent: 'center',
+                      textAlign: 'center',
+                      gap: '4px',
                     }}
                   >
-                    <Sparkles size={15} />
-                    <span>Cümleniz insan diline çevriliyor...</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+                      <Sparkles size={15} />
+                      <span>Cümleniz insan diline çevriliyor...</span>
+                    </div>
+                    <span style={{ fontSize: '12px', color: '#d7e3b2', opacity: 0.9 }}>
+                      Lütfen bekleyiniz...
+                    </span>
                   </div>
                 )}
 
@@ -401,7 +409,7 @@ function HomePage() {
                   disabled={isTranslating}
                 >
                   {isTranslating ? 'Cümleniz insan diline çevriliyor...' : 'İç Sese Çevir ➔'}
-                  <span>CTRL + ENTER</span>
+                  <span>{isTranslating ? 'Lütfen bekleyiniz...' : 'CTRL + ENTER'}</span>
                 </button>
               </form>
 
