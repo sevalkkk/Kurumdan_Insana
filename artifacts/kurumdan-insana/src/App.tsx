@@ -63,7 +63,7 @@ const benefitItems = [
 ];
 
 const faqs = [
-  { question: 'Şirket maillerim kaydediliyor mu?', answer: 'Çeviri istekleri sunucu üzerinden yapay zekâya iletilir ve yalnızca giriş yaptığınız kendi hesabınızın geçmişinde saklanır. Kişisel veya gizli veri paylaşmamanız önerilir.' },
+  { question: 'Şirket maillerim kaydediliyor mu?', answer: 'Çeviri işlemi güvenli sunucu bağlantısı üzerinden yapay zekâ ile gerçekleştirilir ve yaptığınız çeviriler yalnızca sizin hesabınıza özel olarak veritabanında saklanır. \'Geçmiş\' sekmesinden dilediğiniz zaman kayıtlarınızı görüntüleyebilir, düzenleyebilir veya kalıcı olarak silebilirsiniz. Gizliliğiniz için metinlerinize gerçek kişisel veri veya gizli kurum bilgisi eklememenizi öneririz.' },
   { question: 'Ücretsiz mi?', answer: 'Evet, tamamen ücretsizdir. Çeviri özelliğini kullanmak ve geçmişinizi kaydetmek için ücretsiz bir hesap oluşturup giriş yapmanız yeterlidir.' },
   { question: 'Hangi tonlarda çeviri yapıyor?', answer: 'Samimi Kanka, Bıkkın Çalışan ve Dürüst Yönetici tonlarında; dürüst, esprili ve iç sesli tercüme üretir.' },
   { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Ücretsiz hesabınızla giriş yaptıktan sonra metin alanına istediğiniz cümleyi yapıştırıp dilediğiniz tonu seçerek anında iç sese dönüştürebilirsiniz.' },
