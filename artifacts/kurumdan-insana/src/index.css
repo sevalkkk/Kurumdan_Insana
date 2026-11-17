@@ -110,13 +110,17 @@ button { cursor: pointer; }
 .live-indicator { display:flex; gap:8px; align-items:center; color:#a4a69e; }
 .live-dot { width:6px; height:6px; background:#b8ff01; border-radius:50%; box-shadow:0 0 0 4px rgba(184,255,1,.08); }
 .translate-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; }
-.translate-form textarea { width:100%; min-height:106px; resize:vertical; padding:15px 16px; background:#121315; color:#f1f1ea; border:1px solid #303134; border-radius:3px; line-height:1.6; font-size:14px; transition:border .2s; }
-.translate-form textarea:focus { border-color:rgba(184,255,1,.62); outline:none; }
-.translate-form textarea::placeholder { color:#666761; }
+.translate-form-vertical { display:flex; flex-direction:column; width:100%; }
+.translate-form textarea,
+.translate-form-vertical textarea { display:block; width:100%; min-height:168px; resize:vertical; padding:16px 18px; background:#121315; color:#f1f1ea; border:1px solid #303134; border-radius:3px; line-height:1.65; font-size:15px; transition:border .2s, box-shadow .2s; }
+.translate-form textarea:focus,
+.translate-form-vertical textarea:focus { border-color:rgba(184,255,1,.62); box-shadow:0 0 0 3px rgba(184,255,1,.08); outline:none; }
+.translate-form textarea::placeholder,
+.translate-form-vertical textarea::placeholder { color:#666761; }
 .submit-btn { align-self:stretch; min-width:168px; border:0; border-radius:3px; padding:16px 18px; background:#b8ff01; color:#12140d; font-size:13px; font-weight:800; transition:transform .2s, background .2s; }
 .submit-btn:hover { transform:translateY(-2px); background:#c9ff4e; }
 .submit-btn span { display:block; margin-top:7px; font-family:var(--app-font-mono); font-size:9px; font-weight:400; opacity:.64; }
-.translator-foot { display:flex; justify-content:space-between; margin-top:11px; color:#656660; font-size:10px; }
+.translator-foot { display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px; margin-top:11px; color:#656660; font-size:10px; }
 .char-count { font-family:var(--app-font-mono); }
 .examples { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:19px; }
 .examples-label { margin-right:4px; color:#7f807a; font-size:10px; }

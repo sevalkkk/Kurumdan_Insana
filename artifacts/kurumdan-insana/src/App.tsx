@@ -305,11 +305,15 @@ function HomePage() {
                 <textarea
                   ref={textAreaRef}
                   id="corporate-text"
+                  className="w-full block min-h-[160px] resize-y"
                   data-testid="input-corporate-text"
                   value={input}
                   onChange={(event) => {
                     setInput(event.target.value);
                     if (errorMessage) setErrorMessage('');
+                    const el = event.currentTarget;
+                    el.style.height = 'auto';
+                    el.style.height = `${Math.max(168, el.scrollHeight)}px`;
                   }}
                   onKeyDown={(event) => {
                     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -318,7 +322,7 @@ function HomePage() {
                     }
                   }}
                   placeholder="Örn: Proaktif aksiyon alıp konuyu bir sonraki sprintte ele alalım. Takvimlerinize davet düşüyorum."
-                  rows={4}
+                  rows={6}
                   maxLength={1000}
                 />
 
