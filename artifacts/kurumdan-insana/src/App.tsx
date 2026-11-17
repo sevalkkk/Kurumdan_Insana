@@ -9,6 +9,7 @@ import {
   Clock3,
   Copy,
   HeartHandshake,
+  Loader2,
   LogOut,
   MessageSquareText,
   RotateCcw,
@@ -408,8 +409,29 @@ function HomePage() {
                   type="submit"
                   disabled={isTranslating}
                 >
-                  {isTranslating ? 'Cümleniz insan diline çevriliyor...' : 'İç Sese Çevir ➔'}
-                  <span>{isTranslating ? 'Lütfen bekleyiniz...' : 'CTRL + ENTER'}</span>
+                  {isTranslating ? (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        marginTop: 0,
+                        fontFamily: 'inherit',
+                        fontSize: '14px',
+                        fontWeight: 800,
+                        opacity: 1,
+                      }}
+                    >
+                      <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                      Çevriliyor...
+                    </span>
+                  ) : (
+                    <>
+                      İç Sese Çevir ➔
+                      <span>CTRL + ENTER</span>
+                    </>
+                  )}
                 </button>
               </form>
 
