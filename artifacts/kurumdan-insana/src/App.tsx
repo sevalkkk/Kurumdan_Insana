@@ -63,10 +63,10 @@ const benefitItems = [
 ];
 
 const faqs = [
-  { question: 'Şirket maillerim kaydediliyor mu?', answer: 'Hayır. Yazdığınız metin yalnızca bu sayfada, tarayıcınızda işlenir; hiçbir yere gönderilmez veya kaydedilmez.' },
-  { question: 'Ücretsiz mi?', answer: 'Evet. Kurumdan İnsana ücretsiz bir mini araçtır; kullanmak için hesap açmanız gerekmez.' },
+  { question: 'Şirket maillerim kaydediliyor mu?', answer: 'Çeviri istekleri sunucu üzerinden yapay zekâya iletilir ve yalnızca giriş yaptığınız kendi hesabınızın geçmişinde saklanır. Kişisel veya gizli veri paylaşmamanız önerilir.' },
+  { question: 'Ücretsiz mi?', answer: 'Evet, tamamen ücretsizdir. Çeviri özelliğini kullanmak ve geçmişinizi kaydetmek için ücretsiz bir hesap oluşturup giriş yapmanız yeterlidir.' },
   { question: 'Hangi tonlarda çeviri yapıyor?', answer: 'Samimi Kanka, Bıkkın Çalışan ve Dürüst Yönetici tonlarında; dürüst, esprili ve iç sesli tercüme üretir.' },
-  { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Metin alanına istediğiniz cümleyi yapıştırın ve dilediğiniz tonu seçerek anında iç sese dönüştürün.' },
+  { question: 'Kendi kurumsal cümlemi ekleyebilir miyim?', answer: 'Elbette. Ücretsiz hesabınızla giriş yaptıktan sonra metin alanına istediğiniz cümleyi yapıştırıp dilediğiniz tonu seçerek anında iç sese dönüştürebilirsiniz.' },
 ];
 
 const rawBase = import.meta.env.BASE_URL || '/';
@@ -294,7 +294,7 @@ function HomePage() {
                     <span>Örnek Metin Yükle</span>
                   </button>
                   <span className="live-indicator">
-                    <i className="live-dot" aria-hidden="true" /> {isAuthenticated ? `hesap: ${user?.name}` : 'yerel işlem'}
+                    <i className="live-dot" aria-hidden="true" /> {isAuthenticated ? `hesap: ${user?.name}` : 'giriş gerekli'}
                   </span>
                 </div>
               </div>
